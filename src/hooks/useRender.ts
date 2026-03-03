@@ -103,9 +103,8 @@ export const useGenerateBaseImage = () => {
       if (!res.ok) throw new Error(result.error || "Failed to generate image");
       return result;
     },
-    onSuccess: (_, renderId) => {
+    onSuccess: () => {
       toast({ title: "Imagen generada", description: "La imagen base fue creada exitosamente." });
-      // Invalidate to refetch render with new image URL
       queryClient.invalidateQueries({ queryKey: ["renders"] });
     },
     onError: (err: Error) => {
@@ -146,7 +145,7 @@ export const useApproveImage = () => {
   });
 };
 
-/** Generate final video via edge function */
+/** Generate final video via edge function (KICKOFF ONLY — returns immediately) */
 export const useGenerateFinalVideo = () => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -169,16 +168,49 @@ export const useGenerateFinalVideo = () => {
         }
       );
       const result = await res.json();
-      if (!res.ok) throw new Error(result.error || "Failed to generate video");
+      if (!res.ok) throw new Error(result.error || "Failed to start video generation");
       return result;
     },
     onSuccess: () => {
-      toast({ title: "¡Video generado!", description: "Tu video final está listo para descargar." });
+      toast({ title: "Pipeline iniciado", description: "TTS y video se están generando…" });
       queryClient.invalidateQueries({ queryKey: ["renders"] });
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
     },
     onError: (err: Error) => {
       toast({ title: "Error en render", description: err.message, variant: "destructive" });
+    },
+  });
+};
+
+/** Poll render status — called by frontend every 10s during RENDERING */
+export const usePollRenderStatus = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (renderId: string) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/poll-render-status`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ render_id: renderId }),
+        }
+      );
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Poll failed");
+      return result;
+    },
+    onSuccess: (data) => {
+      if (data.status === "DONE" || data.status === "FAILED") {
+        queryClient.invalidateQueries({ queryKey: ["renders"] });
+        queryClient.invalidateQueries({ queryKey: ["assets"] });
+      }
     },
   });
 };

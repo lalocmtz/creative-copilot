@@ -12,8 +12,9 @@ import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-re
 import RenderProgressPanel from "@/components/RenderProgressPanel";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
-import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo } from "@/hooks/useRender";
+import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo, usePollRenderStatus } from "@/hooks/useRender";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
 const actors = [
   { id: "a1", name: "Sofia M.", style: "Natural, cercana", gender: "femenino" },
@@ -38,6 +39,9 @@ const Studio = () => {
   const generateImage = useGenerateBaseImage();
   const approveImage = useApproveImage();
   const generateFinalVideo = useGenerateFinalVideo();
+  const pollRenderStatus = usePollRenderStatus();
+  const { toast } = useToast();
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [level, setLevel] = useState("2");
   const [script, setScript] = useState("");
@@ -99,6 +103,47 @@ const Studio = () => {
     setIntensity([render.emotional_intensity ?? 50]);
     setScenario(render.scenario_prompt ?? "");
   }, [render, populated]);
+
+  // Polling loop: when render is RENDERING, poll every 10s
+  useEffect(() => {
+    if (render?.status !== "RENDERING" || !render?.id) {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // Start polling
+    const poll = () => {
+      if (!pollRenderStatus.isPending) {
+        pollRenderStatus.mutate(render.id, {
+          onSuccess: (data) => {
+            if (data.status === "DONE") {
+              toast({ title: "¡Video generado!", description: "Tu video final está listo." });
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            } else if (data.status === "FAILED") {
+              toast({ title: "Error en render", description: data.detail || "La generación falló", variant: "destructive" });
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+          },
+        });
+      }
+    };
+
+    // Poll immediately once, then every 10s
+    poll();
+    pollIntervalRef.current = setInterval(poll, 10000);
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [render?.status, render?.id]);
 
   const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
   const estDuration = Math.round((wordCount / 160) * 60);
