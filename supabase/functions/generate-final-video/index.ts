@@ -74,10 +74,11 @@ Deno.serve(async (req) => {
     console.log("[KICKOFF] Source video signed URL obtained");
 
     // Step 2: Upload source video to KIE AI file service
+    const videoFileName = `source_${render_id}.mp4`;
     const uploadVideoRes = await fetch(KIE_FILE_UPLOAD, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUrl: sourceVideoUrl }),
+      body: JSON.stringify({ fileUrl: sourceVideoUrl, uploadPath: videoFileName }),
     });
     const uploadVideoData = await uploadVideoRes.json();
     if (!uploadVideoData?.data?.url) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
@@ -85,10 +86,11 @@ Deno.serve(async (req) => {
     console.log("[KICKOFF] Source video uploaded to KIE:", kieVideoUrl);
 
     // Step 3: Upload base image to KIE AI file service
+    const imageFileName = `base_${render_id}.jpg`;
     const uploadImageRes = await fetch(KIE_FILE_UPLOAD, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUrl: baseImageUrl }),
+      body: JSON.stringify({ fileUrl: baseImageUrl, uploadPath: imageFileName }),
     });
     const uploadImageData = await uploadImageRes.json();
     if (!uploadImageData?.data?.url) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
