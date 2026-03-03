@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Film, LayoutDashboard, Zap, Settings } from "lucide-react";
+import { Film, LayoutDashboard, Zap, Settings, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -8,6 +10,8 @@ const navItems = [
 ];
 
 const AppLayout = () => {
+  const { user, signOut } = useAuth();
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Sidebar */}
@@ -39,10 +43,19 @@ const AppLayout = () => {
           ))}
         </nav>
 
-        <div className="px-3 py-4 border-t border-border">
+        <div className="px-3 py-4 border-t border-border space-y-3">
           <div className="px-3 py-2 rounded-lg bg-muted/50">
             <p className="text-xs text-muted-foreground">Créditos hoy</p>
             <p className="text-sm font-semibold text-foreground">$4.20 <span className="text-muted-foreground font-normal">/ $50</span></p>
+          </div>
+
+          <div className="flex items-center gap-2 px-3">
+            <p className="text-xs text-muted-foreground truncate flex-1" title={user?.email ?? ""}>
+              {user?.email}
+            </p>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={signOut} title="Cerrar sesión">
+              <LogOut className="w-3.5 h-3.5" />
+            </Button>
           </div>
         </div>
       </aside>

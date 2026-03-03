@@ -248,11 +248,11 @@ CREATE POLICY "Service role can manage files"
 ---
 
 ### 1.2 Authentication
-- [ ] Add auth pages (Login / Signup) with Supabase Auth
-- [ ] Add protected route wrapper (redirect unauthenticated to `/login`)
-- [ ] Add user context provider
-- [ ] Update `AppLayout` to show user email + logout button
-- [ ] Wire routes: `/login`, `/signup`
+- [x] Add auth pages (Login / Signup) with Supabase Auth
+- [x] Add protected route wrapper (redirect unauthenticated to `/login`)
+- [x] Add user context provider
+- [x] Update `AppLayout` to show user email + logout button
+- [x] Wire routes: `/login`, `/signup`
 
 > **Ref**: [app-flow-pages-and-roles.md](./app-flow-pages-and-roles.md) — `/login` page, Solo Creator role (MVP)
 
