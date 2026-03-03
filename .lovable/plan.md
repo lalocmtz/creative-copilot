@@ -1,71 +1,49 @@
 
 
-# Phase 1.2 — Authentication (Login / Signup + Protected Routes)
+# Replace Apify with RapidAPI TikTok Download Video
 
-This is the next uncompleted task from tasks.md. Everything else depends on authentication being in place since all tables use RLS with `auth.uid()`.
+## Summary
 
-## What Gets Built
+Swap the Apify TikTok scraper in `ingest-asset` for the RapidAPI "tiktok download video" service (`tiktok-download-video1.p.rapidapi.com`), and add the two missing API secrets (`RAPIDAPI_KEY` and `OPENAI_API_KEY`) so the ingestion pipeline becomes fully functional.
 
-1. **Auth Pages** — `/login` and `/signup` pages with email/password forms, matching the dark "control room" design
-2. **Auth Context Provider** — Wraps the app, provides current user session, handles `onAuthStateChange`
-3. **Protected Route Wrapper** — Redirects unauthenticated users to `/login`
-4. **AppLayout Update** — Shows user email + logout button in the sidebar
-5. **Route Wiring** — `/login` and `/signup` as public routes, everything else protected
+## Changes
 
-## No Profile Table Needed (MVP)
+### 1. Add Secrets
 
-For the Solo Creator role (MVP), we only need `auth.users` — no extra profiles table. The `assets` table already references `user_id` from `auth.users`.
+Two secrets need to be configured before the pipeline can run:
 
----
+- **RAPIDAPI_KEY** -- Your RapidAPI key (visible in the screenshot: `b0957fb32fm...`). Replaces the old `APIFY_API_KEY`.
+- **OPENAI_API_KEY** -- For Whisper transcription (you mentioned you already connected this one via "OpenCloud").
 
-## Technical Details
+### 2. Update `supabase/functions/ingest-asset/index.ts`
 
-### New Files
+Replace the Apify download block (lines 83-140 approximately) with a RapidAPI call:
 
-| File | Purpose |
-|------|---------|
-| `src/pages/Login.tsx` | Login form (email + password) |
-| `src/pages/Signup.tsx` | Signup form (email + password) |
-| `src/contexts/AuthContext.tsx` | React context with session state, `useAuth()` hook |
-| `src/components/ProtectedRoute.tsx` | Wrapper that redirects to `/login` if no session |
+- **Endpoint**: `GET https://tiktok-download-video1.p.rapidapi.com/getVideo?url={encoded_tiktok_url}&hd=1`
+- **Headers**: `x-rapidapi-host: tiktok-download-video1.p.rapidapi.com` + `x-rapidapi-key: {RAPIDAPI_KEY}`
+- **Response parsing**: Extract video URL from `data.hdplay` (HD no watermark) or fallback to `data.play`
+- **Metadata**: Extract duration from `data.duration`, author from `data.author.nickname`
+- Everything else stays the same (storage upload, job tracking, idempotency, transcription)
 
-### Modified Files
+### 3. Update `docs/tasks.md`
 
-| File | Change |
-|------|--------|
-| `src/App.tsx` | Wrap with `AuthProvider`, add `/login` and `/signup` routes outside `ProtectedRoute` |
-| `src/components/AppLayout.tsx` | Add user email display + logout button in sidebar footer |
+- Change line 293 from `APIFY_API_KEY` to `RAPIDAPI_KEY` and mark secrets as configured once added
+- Mark `OPENAI_API_KEY` as configured if already present
 
-### Auth Context Logic
-
-```typescript
-// Uses onAuthStateChange (set up BEFORE getSession)
-// Provides: user, session, loading, signOut()
-// No auto-confirm — users must verify email
-```
-
-### Route Structure
+## Technical Detail
 
 ```text
-/login          -- public (Login page)
-/signup         -- public (Signup page)
-/               -- protected (Dashboard)
-/ingest         -- protected (Ingest)
-/asset/:id/*    -- protected (Blueprint, Studio)
+Old flow:  POST Apify scraper -> wait for run -> get videoUrl from result[0]
+New flow:  GET RapidAPI /getVideo?url=...&hd=1 -> get data.hdplay from JSON response
 ```
 
-### Email Verification
+The RapidAPI call is simpler (single GET, instant response) vs Apify (POST + polling). No other files change -- the frontend, job tracking, and Whisper transcription remain identical.
 
-Email auto-confirm will NOT be enabled. Users receive a verification email and must click it before signing in. The login page will show a friendly message if the email isn't verified yet.
+## Sequence
 
-### Design
-
-- Forms match the existing dark theme (bg-background, border-border, primary buttons)
-- Centered card layout for auth pages
-- Friendly error messages per design-guidelines.md
-- Smooth transitions with framer-motion
-
-## After This Task
-
-Once approved and implemented, I'll mark tasks 1.2 as complete in tasks.md and move to **Phase 1.3 (Zustand stores)** and **1.4 (React Query hooks)** — which can be done together quickly.
+1. Request RAPIDAPI_KEY secret from user
+2. Request OPENAI_API_KEY secret from user (if not yet added)
+3. Update the edge function code
+4. Deploy and test
+5. Update tasks.md
 
