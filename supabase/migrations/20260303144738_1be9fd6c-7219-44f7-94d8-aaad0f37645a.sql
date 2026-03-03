@@ -1,0 +1,1 @@
+UPDATE renders SET status = 'IMAGE_APPROVED', cost_breakdown_json = NULL WHERE id = 'b0461426-0b2b-4a05-a9d0-bc3ffb04d4a1';

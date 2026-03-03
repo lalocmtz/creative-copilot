@@ -81,8 +81,8 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ fileUrl: sourceVideoUrl, uploadPath: videoFileName }),
     });
     const uploadVideoData = await uploadVideoRes.json();
-    if (!uploadVideoData?.data?.url) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
-    const kieVideoUrl = uploadVideoData.data.url;
+    const kieVideoUrl = uploadVideoData?.data?.downloadUrl || uploadVideoData?.data?.url;
+    if (!kieVideoUrl) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
     console.log("[KICKOFF] Source video uploaded to KIE:", kieVideoUrl);
 
     // Step 3: Upload base image to KIE AI file service
@@ -93,8 +93,8 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ fileUrl: baseImageUrl, uploadPath: imageFileName }),
     });
     const uploadImageData = await uploadImageRes.json();
-    if (!uploadImageData?.data?.url) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
-    const kieImageUrl = uploadImageData.data.url;
+    const kieImageUrl = uploadImageData?.data?.downloadUrl || uploadImageData?.data?.url;
+    if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
     // Step 4: Create motion control task (Kling 2.6)
