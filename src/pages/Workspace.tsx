@@ -249,7 +249,13 @@ const Workspace = () => {
     navigate(`/workspace/${newAsset.id}`, { replace: true });
 
     if (createData.cached && newAsset.status !== "PENDING") {
-      addLog("Asset existente (cache hit) ✓"); setIngestPhase("done"); return;
+      addLog("Asset existente (cache hit) ✓"); setIngestPhase("done");
+      // Auto-trigger blueprint if not yet generated
+      if (newAsset.status === "VIDEO_INGESTED") {
+        addLog("Generando blueprint automáticamente…");
+        generateBlueprint.mutate({ assetId: newAsset.id, force: false });
+      }
+      return;
     }
     addLog(`Asset creado: ${newAsset.id.slice(0, 8)}…`);
     setIngestPhase("downloading"); addLog("Conectando con TikTok…");
@@ -263,6 +269,9 @@ const Workspace = () => {
     }
     addLog("Video descargado ✓"); addLog("Transcripción completa ✓");
     setIngestPhase("done");
+    // Auto-trigger blueprint
+    addLog("Generando blueprint automáticamente…");
+    generateBlueprint.mutate({ assetId: newAsset.id, force: false });
   };
 
   const handleLevelChange = (newLevel: string) => {

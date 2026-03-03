@@ -449,8 +449,10 @@ After completing all above:
 ### Phase 6 — Final Render Pipeline ✅
 
 - [x] Edge function `generate-final-video` orchestrates TTS → Video pipeline
-- [x] TTS via KIE AI (ElevenLabs text-to-speech-turbo-2-5)
-- [x] Image-to-Video via KIE AI (Kling v2.1 Master)
+- [x] TTS via ElevenLabs (speed 1.15x for UGC feel)
+- [x] Image-to-Video via multi-model fallback (Kling V2.1 Master → Kling 2.6 → Sora 2)
+- [x] Gemini Prompt Maestro generates detailed shot-by-shot I2V prompt optimized for UGC sales
+- [x] Auto-trigger blueprint after ingestion (zero-click flow)
 - [x] Polling with progress tracking (step-by-step updates to DB)
 - [x] Frontend polling every 5s during RENDERING status
 - [x] RenderProgressPanel component with step indicators

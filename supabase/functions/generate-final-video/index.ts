@@ -182,15 +182,24 @@ Deno.serve(async (req) => {
     const baseImageUrl = render.base_image_url;
     if (!baseImageUrl) return json({ error: "No base image URL" }, 400);
 
-    // Resolve script
+    // Resolve script + blueprint analysis
     let scriptText = clientScript || "";
-    if (!scriptText) {
-      const { data: bp } = await supabaseAdmin.from("blueprints").select("variations_json").eq("asset_id", assetId).single();
-      if (bp?.variations_json) {
-        const variations = bp.variations_json as any[];
-        const match = variations.find((v: any) => v.nivel === render.variation_level);
-        scriptText = match?.guion || "";
+    let blueprintAnalysis: any = null;
+    let originalTranscript = "";
+    {
+      const { data: bp } = await supabaseAdmin.from("blueprints").select("analysis_json, variations_json").eq("asset_id", assetId).single();
+      if (bp) {
+        blueprintAnalysis = bp.analysis_json;
+        if (!scriptText && bp.variations_json) {
+          const variations = bp.variations_json as any[];
+          const match = variations.find((v: any) => v.nivel === render.variation_level);
+          scriptText = match?.guion || "";
+        }
       }
+    }
+    {
+      const { data: assetData } = await supabaseAdmin.from("assets").select("transcript").eq("id", assetId).single();
+      originalTranscript = assetData?.transcript || "";
     }
     if (!scriptText) return json({ error: "No script found for this render" }, 400);
 
@@ -299,14 +308,83 @@ Deno.serve(async (req) => {
     if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
-    // Build dynamic prompt
+    // === STEP 2.5: Gemini Prompt Maestro — generate detailed shot plan ===
+    await supabaseAdmin.from("renders").update({
+      cost_breakdown_json: {
+        _tasks: { condensed_script: condensedScript },
+        _progress: { step: "generating_shot_plan", detail: "Gemini generando shot plan UGC…", updated_at: new Date().toISOString() },
+        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _tts_audio_url: ttsAudioUrl,
+        _started_at: new Date().toISOString(),
+      },
+    }).eq("id", render_id);
+
     const emotionalIntensity = render.emotional_intensity ?? 50;
     const scenarioExcerpt = render.scenario_prompt ? render.scenario_prompt.substring(0, 200) : "";
-    const scriptExcerpt = condensedScript.substring(0, 100);
-    const movementLevel = emotionalIntensity > 70 ? "moderate expressive movement, animated gestures" : "subtle natural movement, gentle gestures";
-    
-    const i2vPrompt = `Create a 10-second vertical (9:16) UGC-style TikTok video. ${movementLevel}, person talking directly to camera with authentic energy. Handheld camera feel, natural lighting, fast pacing. Context: "${scriptExcerpt}". ${scenarioExcerpt}. Style: realistic UGC, not cinematic. No watermarks, no logos, no famous faces.`.trim();
-    
+    const hookInfo = blueprintAnalysis?.hook || "";
+    const angleInfo = blueprintAnalysis?.angulo || "";
+    const emotionInfo = blueprintAnalysis?.emocion_dominante || "";
+
+    let i2vPrompt = "";
+    try {
+      const maestroRes = await fetch(LOVABLE_AI_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            {
+              role: "system",
+              content: `You are a UGC video director for TikTok Shop sales ads. Your job is to write a single, detailed image-to-video prompt for Sora/Kling AI.
+
+RULES:
+- Output ONLY the prompt text, nothing else. No JSON, no markdown.
+- The prompt must describe a 10-second vertical (9:16) UGC-style sales/recommendation video.
+- Structure the video in 4 timed beats: hook (0-2s), proof/demo (2-6s), offer (6-8s), CTA (8-10s).
+- The person in the base image must talk directly to camera with authentic selling energy.
+- SAME camera angle, framing, and shot composition as the base image throughout.
+- The product must be visible and featured prominently — the person is RECOMMENDING this product.
+- Handheld camera feel, natural lighting, fast pacing, authentic UGC aesthetic.
+- Include specific movement directions: gestures, product interaction, facial expressions.
+- Emotional intensity level: ${emotionalIntensity}/100.
+- NEVER mention logos, watermarks, text overlays, or famous faces.`
+            },
+            {
+              role: "user",
+              content: `Generate the I2V prompt based on this context:
+
+ORIGINAL TRANSCRIPT: "${originalTranscript.substring(0, 300)}"
+
+BLUEPRINT ANALYSIS:
+- Hook: ${hookInfo}
+- Angle: ${angleInfo}
+- Emotion: ${emotionInfo}
+
+CONDENSED SCRIPT (what the person says): "${condensedScript}"
+
+SCENARIO: ${scenarioExcerpt || "Natural indoor setting"}
+
+Write the detailed shot-by-shot I2V prompt now.`
+            }
+          ],
+        }),
+      });
+
+      if (maestroRes.ok) {
+        const maestroData = await maestroRes.json();
+        i2vPrompt = maestroData.choices?.[0]?.message?.content?.trim() || "";
+        console.log(`[PROMPT MAESTRO] Generated prompt (${i2vPrompt.length} chars)`);
+      }
+    } catch (e: any) {
+      console.warn(`[PROMPT MAESTRO] Failed, using fallback: ${e.message}`);
+    }
+
+    // Fallback if Gemini prompt failed
+    if (!i2vPrompt) {
+      const movementLevel = emotionalIntensity > 70 ? "moderate expressive movement, animated gestures" : "subtle natural movement, gentle gestures";
+      i2vPrompt = `Create a 10-second vertical (9:16) UGC-style TikTok Shop sales video. ${movementLevel}, person talking directly to camera recommending a product with authentic selling energy. Handheld camera feel, natural lighting, fast pacing. The person holds/shows the product while speaking enthusiastically. Structure: 0-2s eye-catching hook, 2-6s product demo/proof, 6-8s special offer mention, 8-10s call to action. Script context: "${condensedScript.substring(0, 100)}". ${scenarioExcerpt}. Style: realistic UGC sales video, not cinematic. No watermarks, no logos, no famous faces.`;
+    }
+
     const negativePrompt = "logos, text overlay, watermark, famous faces, distorted faces, extra limbs, cinematic look, slow motion, studio lighting";
 
     console.log(`[KICKOFF] I2V prompt: ${i2vPrompt.substring(0, 150)}...`);
