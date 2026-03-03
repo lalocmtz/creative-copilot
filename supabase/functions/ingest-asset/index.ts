@@ -188,7 +188,12 @@ Deno.serve(async (req) => {
         return json({ error: errorMsg, step: "download" }, 500);
       }
     } else {
-      videoUrl = (asset.metadata_json as Record<string, unknown>)?.video_url as string;
+      // Download was cached — generate a fresh signed URL from storage
+      const storagePath = `${user.id}/${asset_id}/source.mp4`;
+      const { data: signedData } = await supabase.storage
+        .from("ugc-assets")
+        .createSignedUrl(storagePath, 3600);
+      videoUrl = signedData?.signedUrl || (asset.metadata_json as Record<string, unknown>)?.video_url as string;
     }
 
     // ── Step 2: Transcribe ──
