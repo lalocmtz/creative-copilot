@@ -214,3 +214,33 @@ export const usePollRenderStatus = () => {
     },
   });
 };
+
+/** Reset a stuck render (RENDERING/FAILED) back to IMAGE_APPROVED for retry */
+export const useResetRender = () => {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ renderId, assetId }: { renderId: string; assetId: string }) => {
+      const { error: renderErr } = await supabase
+        .from("renders")
+        .update({ status: "IMAGE_APPROVED", cost_breakdown_json: {}, final_video_url: null, render_cost: 0 })
+        .eq("id", renderId);
+      if (renderErr) throw renderErr;
+
+      const { error: assetErr } = await supabase
+        .from("assets")
+        .update({ status: "IMAGE_APPROVED" })
+        .eq("id", assetId);
+      if (assetErr) throw assetErr;
+    },
+    onSuccess: () => {
+      toast({ title: "Render reseteado", description: "Podés reintentar la generación de video." });
+      queryClient.invalidateQueries({ queryKey: ["renders"] });
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+};

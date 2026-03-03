@@ -12,7 +12,7 @@ import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2, AlertTriangle } 
 import RenderProgressPanel from "@/components/RenderProgressPanel";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
-import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo, usePollRenderStatus } from "@/hooks/useRender";
+import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo, usePollRenderStatus, useResetRender } from "@/hooks/useRender";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -40,6 +40,7 @@ const Studio = () => {
   const approveImage = useApproveImage();
   const generateFinalVideo = useGenerateFinalVideo();
   const pollRenderStatus = usePollRenderStatus();
+  const resetRender = useResetRender();
   const { toast } = useToast();
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -528,7 +529,7 @@ const Studio = () => {
                         <p className="text-[10px] text-muted-foreground">Audio del video original (reproducir junto al video)</p>
                       </div>
                     )}
-                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.45"}`} label="costo motion transfer (720p)" size="sm" />
+                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.10"}`} label="costo video (image-to-video)" size="sm" />
                     <div className="flex gap-2">
                       <a
                         href={render.final_video_url}
@@ -542,47 +543,42 @@ const Studio = () => {
                         </Button>
                       </a>
                     </div>
-                    <p className="text-xs text-success text-center font-medium">✓ Motion transfer completado</p>
+                    <p className="text-xs text-success text-center font-medium">✓ Video generado exitosamente</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {(() => {
-                      const dur = (asset.metadata_json as any)?.duration;
-                      const sourceDur = typeof dur === "number" ? dur : null;
-                      const capped = sourceDur && sourceDur > 30;
-                      const effectiveDur = capped ? 30 : (sourceDur || 30);
-                      const estCost = (effectiveDur / 30 * 0.45).toFixed(2);
-                      return (
-                        <>
-                          {capped && (
-                            <div className="flex items-start gap-2 bg-warning/10 border border-warning/20 rounded-lg p-3 text-xs text-warning">
-                              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                              <span>El video original dura {Math.round(sourceDur)}s. Se procesarán los primeros 30s.</span>
-                            </div>
-                          )}
-                          <CostDisplay amount={`~$${estCost}`} label={`motion transfer (${effectiveDur}s, 720p)`} size="md" />
-                        </>
-                      );
-                    })()}
+                    <CostDisplay amount="~$0.10" label="video 5s (image-to-video, 720p)" size="md" />
                     <p className="text-[10px] text-muted-foreground text-center">
-                      Transferencia estructural — misma duración y gestos del video original
+                      Anima la imagen base con movimiento natural (5 segundos)
                     </p>
                     {isRendering && (
                       <RenderProgressPanel progress={(render?.cost_breakdown_json as any)?._progress} />
                     )}
+                    {(render?.status === "FAILED" || (render?.status === "RENDERING" && !(render?.cost_breakdown_json as any)?._tasks)) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2 border-warning text-warning hover:bg-warning/10"
+                        onClick={() => render && assetId && resetRender.mutate({ renderId: render.id, assetId })}
+                        disabled={resetRender.isPending}
+                      >
+                        {resetRender.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+                        Reintentar
+                      </Button>
+                    )}
                     <Button
                       onClick={() => render && generateFinalVideo.mutate(render.id)}
-                      disabled={isRendering || !render}
+                      disabled={isRendering || !render || render.status === "FAILED"}
                       className="w-full gap-2"
                     >
                       {isRendering ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Transfiriendo movimiento…
+                          Generando video…
                         </>
                       ) : (
                         <>
-                          Iniciar Motion Transfer
+                          Generar Video
                           <Film className="w-4 h-4" />
                         </>
                       )}
