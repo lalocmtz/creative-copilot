@@ -141,3 +141,40 @@ export const useApproveImage = () => {
     },
   });
 };
+
+/** Generate final video via edge function */
+export const useGenerateFinalVideo = () => {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (renderId: string) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/generate-final-video`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ render_id: renderId }),
+        }
+      );
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Failed to generate video");
+      return result;
+    },
+    onSuccess: () => {
+      toast({ title: "¡Video generado!", description: "Tu video final está listo para descargar." });
+      queryClient.invalidateQueries({ queryKey: ["renders"] });
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error en render", description: err.message, variant: "destructive" });
+    },
+  });
+};

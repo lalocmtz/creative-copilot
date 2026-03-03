@@ -11,7 +11,7 @@ import StatusBadge from "@/components/StatusBadge";
 import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
-import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage } from "@/hooks/useRender";
+import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo } from "@/hooks/useRender";
 import { useAuth } from "@/contexts/AuthContext";
 
 const actors = [
@@ -36,6 +36,7 @@ const Studio = () => {
   const updateRender = useUpdateRender();
   const generateImage = useGenerateBaseImage();
   const approveImage = useApproveImage();
+  const generateFinalVideo = useGenerateFinalVideo();
 
   const [level, setLevel] = useState("2");
   const [script, setScript] = useState("");
@@ -103,6 +104,8 @@ const Studio = () => {
 
   const imageGenerated = render?.status === "IMAGE_GENERATED" || render?.status === "IMAGE_APPROVED" || render?.status === "RENDERING" || render?.status === "DONE";
   const imageApproved = render?.status === "IMAGE_APPROVED" || render?.status === "RENDERING" || render?.status === "DONE";
+  const isRendering = render?.status === "RENDERING" || generateFinalVideo.isPending;
+  const videoDone = render?.status === "DONE";
 
   const handleSaveDraft = () => {
     if (!render) return;
@@ -454,15 +457,76 @@ const Studio = () => {
           {imageApproved && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
               <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground">Render Final</h3>
-                <CostDisplay amount="~$2.50" label="TTS + video + lipsync" size="md" />
-                <p className="text-xs text-muted-foreground">
-                  Aprobá la imagen antes de renderizar: así controlás calidad y costo.
-                </p>
-                <Button disabled className="w-full gap-2">
-                  Generar Video Final
-                  <Film className="w-4 h-4" />
-                </Button>
+                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <Film className="w-4 h-4 text-primary" />
+                  Render Final
+                </h3>
+
+                {videoDone && render?.final_video_url ? (
+                  <div className="space-y-3">
+                    <div className="aspect-[9/16] rounded-lg overflow-hidden border border-border bg-black">
+                      <video
+                        src={render.final_video_url}
+                        controls
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    {(render.cost_breakdown_json as any)?.audio_url && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground font-medium">Audio (TTS)</p>
+                        <audio
+                          src={(render.cost_breakdown_json as any).audio_url}
+                          controls
+                          className="w-full h-8"
+                        />
+                      </div>
+                    )}
+                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.83"}`} label="costo total render" size="sm" />
+                    <div className="flex gap-2">
+                      <a
+                        href={render.final_video_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1"
+                      >
+                        <Button variant="outline" size="sm" className="w-full gap-2">
+                          <Film className="w-4 h-4" />
+                          Descargar Video
+                        </Button>
+                      </a>
+                    </div>
+                    <p className="text-xs text-success text-center font-medium">✓ Video generado exitosamente</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <CostDisplay amount="~$0.83" label="TTS + video (5s)" size="md" />
+                    {isRendering && (
+                      <div className="bg-muted/30 rounded-lg p-3 text-center space-y-2">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
+                        <p className="text-xs text-muted-foreground">
+                          Generando video… esto puede tardar hasta 5 minutos.
+                        </p>
+                      </div>
+                    )}
+                    <Button
+                      onClick={() => render && generateFinalVideo.mutate(render.id)}
+                      disabled={isRendering || !render}
+                      className="w-full gap-2"
+                    >
+                      {isRendering ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Generando…
+                        </>
+                      ) : (
+                        <>
+                          Generar Video Final
+                          <Film className="w-4 h-4" />
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

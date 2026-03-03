@@ -8,3 +8,9 @@ verify_jwt = false
 
 [functions.generate-blueprint]
 verify_jwt = false
+
+[functions.generate-final-video]
+verify_jwt = false
+
+[functions.generate-base-image]
+verify_jwt = false
