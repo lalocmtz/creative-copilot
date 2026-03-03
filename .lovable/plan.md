@@ -1,96 +1,72 @@
 
-# Phase 6: Final Video Render Pipeline
 
-## What We Have Now
-- Base image generated and approved (Lovable AI / Gemini)
-- Script (guion) from blueprint variations
-- KIE AI API key already configured (access to Kling, ElevenLabs, and more)
-- Render record in DB with all config (actor, voice, intensity, scenario)
+# Fix: Video Pipeline Timeout
 
-## What We Need to Build
+## Root Cause
+Supabase Edge Functions timeout after ~60-150 seconds. The current `generate-final-video` function tries to poll KIE AI for 3-5 minutes synchronously inside a single function call — it gets killed by the platform before the video finishes.
 
-The final video pipeline has 3 steps, all using **KIE AI** as the unified API gateway:
+The render `b0461426` has been stuck at `RENDERING` / `video_generating` since the function timed out.
 
-### Step 1: TTS (Text-to-Speech) via ElevenLabs through KIE AI
-- Send the script text to KIE AI's ElevenLabs endpoint
-- Get back audio file URL
-- KIE AI handles ElevenLabs integration -- no separate ElevenLabs API key needed
+## Solution: Split into Kickoff + Poll
 
-### Step 2: Image-to-Video via Kling through KIE AI
-- Send the approved base image + motion prompt to Kling v2.1
-- Generate a ~10s video of the person "speaking" / performing
-- Async task: create task, then poll for completion
+### 1. Refactor `generate-final-video` (Kickoff Only)
+- Validate render, start TTS task via KIE AI
+- Save the TTS `taskId` into `cost_breakdown_json._tasks`
+- Return immediately with `{ started: true }`
+- Total execution: ~2-3 seconds
 
-### Step 3: (Future) LipSync + Merge
-- For MVP, we skip lipsync and deliver video + audio separately or merged
-- LipSync can be added later with Kling 2.6 Motion Control
+### 2. New Edge Function: `poll-render-status`
+Lightweight function the frontend calls every 10 seconds:
+- Reads saved task IDs from `cost_breakdown_json._tasks`
+- Checks KIE AI task status
+- When TTS completes → starts Video task, saves new taskId
+- When Video completes → downloads files, uploads to storage, marks DONE
+- Each call: ~1-3 seconds (single API check)
 
-## Implementation Plan
+### 3. Frontend Changes (`useRender.ts` + `Studio.tsx`)
+- After kickoff, frontend polls `poll-render-status` every 10 seconds
+- Each poll response includes current step/progress
+- When poll returns `status: "DONE"`, stop polling and show video
 
-### 1. Edge Function: `generate-final-video`
-Creates a new Supabase Edge Function that orchestrates the pipeline:
+### 4. Database Reset
+- Reset the stuck render back to `IMAGE_APPROVED` so user can retry
 
+## Files to Create/Modify
+1. **Refactor** `supabase/functions/generate-final-video/index.ts` — kickoff only
+2. **Create** `supabase/functions/poll-render-status/index.ts` — stateless poll + finalize
+3. **Edit** `src/hooks/useRender.ts` — add polling mutation
+4. **Edit** `src/pages/Studio.tsx` — wire up polling loop
+5. **Edit** `supabase/config.toml` — register new function
+6. **SQL migration** — reset stuck render
+
+## Architecture Diagram
 ```text
-Input: render_id
-Auth: validate user owns the render
-
-Pipeline:
-1. Validate render.status = IMAGE_APPROVED
-2. Create job record (type: "final_video", status: RUNNING)
-3. Call KIE AI ElevenLabs TTS:
-   POST https://api.kie.ai/api/v1/jobs/createTask
-   { model: "elevenlabs/tts", input: { text, voice_id } }
-4. Poll for TTS completion via GET /api/v1/jobs/recordInfo?taskId=...
-5. Call KIE AI Kling image-to-video:
-   POST https://api.kie.ai/api/v1/jobs/createTask
-   { model: "kling/v2-1-master-image-to-video", input: { image_url, prompt } }
-6. Poll for video completion
-7. Download both files, upload to Supabase Storage
-8. Update render: final_video_url, status = DONE
-9. Update asset: status = VIDEO_RENDERED
-10. Update job with cost breakdown
+Frontend                    Edge Functions              KIE AI
+   │                            │                         │
+   ├─ POST generate-final-video─┤                         │
+   │  (kickoff)                 ├─ createTask(TTS) ──────►│
+   │                            │  save taskId            │
+   │◄── { started: true } ─────┤                         │
+   │                            │                         │
+   ├─ POST poll-render-status ──┤                         │
+   │  (every 10s)               ├─ recordInfo(ttsId) ───►│
+   │◄── { step: "tts" } ───────┤                         │
+   │                            │                         │
+   ├─ POST poll-render-status ──┤                         │
+   │                            ├─ recordInfo(ttsId) ───►│
+   │                            │  TTS done!              │
+   │                            ├─ createTask(Video) ───►│
+   │◄── { step: "video" } ─────┤  save videoTaskId       │
+   │                            │                         │
+   │  ... (repeat polls) ...    │                         │
+   │                            │                         │
+   ├─ POST poll-render-status ──┤                         │
+   │                            ├─ recordInfo(videoId) ─►│
+   │                            │  Video done!            │
+   │                            ├─ download + upload      │
+   │                            ├─ update DB: DONE        │
+   │◄── { status: "DONE" } ────┤                         │
+   │                            │                         │
+   └─ Show video player         │                         │
 ```
 
-### 2. Frontend Hook: `useGenerateFinalVideo`
-- New mutation in `useRender.ts`
-- Calls the edge function with render_id
-- Shows loading state + toast notifications
-
-### 3. Studio UI Update
-- Enable the "Generar Video Final" button (currently disabled)
-- Show progress during generation (polling render status)
-- Display video player when final_video_url is available
-- Download button for the finished video
-
-### 4. Config Updates
-- Add `generate-final-video` function to `supabase/config.toml` with `verify_jwt = false`
-
-## Technical Details
-
-### KIE AI Endpoints Used
-- **TTS**: `POST https://api.kie.ai/api/v1/jobs/createTask` with model `elevenlabs/tts`
-- **Image-to-Video**: `POST https://api.kie.ai/api/v1/jobs/createTask` with model `kling/v2-1-master-image-to-video`
-- **Poll Status**: `GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=TASK_ID`
-- **Download URL**: `POST https://api.kie.ai/api/v1/common/download-url`
-
-### Auth: `Authorization: Bearer KIE_AI_API_KEY`
-
-### Voice Mapping
-Map the Studio voice IDs (v1, v2, v3) to actual ElevenLabs voice IDs available through KIE AI.
-
-### Polling Strategy
-- Poll every 10 seconds, max 60 attempts (10 minutes timeout)
-- Edge function handles the full pipeline synchronously (TTS then Video)
-- Frontend shows loading state during the process
-
-### Cost Estimate
-- TTS (ElevenLabs): ~$0.10 per generation
-- Image-to-Video (Kling v2.1 Master): ~$0.50-1.00 per 10s video
-- Total estimated: ~$1.00-2.00 per final render
-
-### Files to Create/Modify
-1. **Create** `supabase/functions/generate-final-video/index.ts` -- main pipeline
-2. **Edit** `src/hooks/useRender.ts` -- add `useGenerateFinalVideo` hook
-3. **Edit** `src/pages/Studio.tsx` -- wire up button, add video preview + download
-4. **Edit** `supabase/config.toml` -- register new function (note: cannot edit directly, will need migration approach)
-5. **Edit** `docs/tasks.md` -- mark Phase 6 progress
