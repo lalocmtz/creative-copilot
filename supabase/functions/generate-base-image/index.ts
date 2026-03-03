@@ -26,15 +26,15 @@ async function pollKieTask(taskId: string, apiKey: string, maxAttempts = 24): Pr
     const data = await res.json();
     console.log("KIE poll response:", JSON.stringify(data));
 
-    if (data?.data?.status === 1) {
-      const imageUrl = data?.data?.info?.images?.[0];
+    if (data?.data?.successFlag === 1) {
+      const imageUrl = data?.data?.response?.resultImageUrl;
       if (imageUrl) return { success: true, imageUrl };
       return { success: false, error: "No image URL in success response" };
     }
-    if (data?.data?.status === 2 || data?.data?.status === 3) {
-      return { success: false, error: `KIE AI generation failed with status ${data.data.status}` };
+    if (data?.data?.errorCode || data?.data?.successFlag === -1) {
+      return { success: false, error: `KIE AI generation failed: ${data.data.errorMessage || 'unknown error'}` };
     }
-    // status 0 = still generating, continue polling
+    // successFlag 0 = still generating, continue polling
   }
   return { success: false, error: "Timeout: KIE AI did not complete within 2 minutes" };
 }
