@@ -130,6 +130,11 @@ const Studio = () => {
               pollIntervalRef.current = null;
             }
           },
+          onError: () => {
+            // Stop polling on error (e.g. STUCK state with no task data)
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          },
         });
       }
     };
