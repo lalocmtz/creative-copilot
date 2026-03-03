@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -8,6 +9,9 @@ import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
 import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
+import { useAsset } from "@/hooks/useSupabaseQueries";
+import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage } from "@/hooks/useRender";
+import { useAuth } from "@/contexts/AuthContext";
 
 const actors = [
   { id: "a1", name: "Sofia M.", style: "Natural, cercana" },
@@ -22,34 +26,89 @@ const voices = [
 ];
 
 const Studio = () => {
+  const { id: assetId } = useParams<{ id: string }>();
+  const { user } = useAuth();
+  const { data: asset, isLoading: assetLoading } = useAsset(assetId);
+  const { data: render, isLoading: renderLoading } = useRender(assetId);
+  const createDraft = useCreateRenderDraft();
+  const updateRender = useUpdateRender();
+  const generateImage = useGenerateBaseImage();
+  const approveImage = useApproveImage();
+
   const [level, setLevel] = useState("2");
-  const [script, setScript] = useState(
-    "Este producto me tiene obsesionada. Miren esta textura, se siente como seda en la piel. Lo uso cada mañana y la diferencia es real. Mi piel antes estaba apagada, ahora la gente me pregunta qué me hago. Link en bio, está en descuento."
-  );
+  const [script, setScript] = useState("");
   const [actor, setActor] = useState("a1");
   const [voice, setVoice] = useState("v1");
-  const [intensity, setIntensity] = useState([65]);
-  const [scenario, setScenario] = useState("Baño moderno con luz natural suave, espejo grande");
-  const [imageGenerated, setImageGenerated] = useState(false);
-  const [imageApproved, setImageApproved] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [rendering, setRendering] = useState(false);
+  const [intensity, setIntensity] = useState([50]);
+  const [scenario, setScenario] = useState("");
+  const [initialized, setInitialized] = useState(false);
 
-  const wordCount = script.trim().split(/\s+/).length;
+  // Auto-create draft render if none exists
+  useEffect(() => {
+    if (!assetId || !asset || renderLoading || render || createDraft.isPending) return;
+    if (asset.status === "BLUEPRINT_GENERATED" || asset.status === "IMAGE_APPROVED" || asset.status === "VIDEO_RENDERED") {
+      createDraft.mutate({ assetId, config: { variation_level: 2 } });
+    }
+  }, [assetId, asset, render, renderLoading]);
+
+  // Sync local state from render record
+  useEffect(() => {
+    if (!render || initialized) return;
+    setLevel(String(render.variation_level ?? 2));
+    setActor(render.actor_id ?? "a1");
+    setVoice(render.voice_id ?? "v1");
+    setIntensity([render.emotional_intensity ?? 50]);
+    setScenario(render.scenario_prompt ?? "");
+    setInitialized(true);
+  }, [render, initialized]);
+
+  const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
   const estDuration = Math.round((wordCount / 160) * 60);
 
-  const handleGenerateImage = () => {
-    setGenerating(true);
-    setTimeout(() => {
-      setGenerating(false);
-      setImageGenerated(true);
-    }, 2000);
+  const imageGenerated = render?.status === "IMAGE_GENERATED" || render?.status === "IMAGE_APPROVED" || render?.status === "RENDERING" || render?.status === "DONE";
+  const imageApproved = render?.status === "IMAGE_APPROVED" || render?.status === "RENDERING" || render?.status === "DONE";
+
+  const handleSaveDraft = () => {
+    if (!render) return;
+    updateRender.mutate({
+      renderId: render.id,
+      fields: {
+        variation_level: parseInt(level),
+        actor_id: actor,
+        voice_id: voice,
+        emotional_intensity: intensity[0],
+        scenario_prompt: scenario,
+      },
+    });
   };
 
-  const handleRender = () => {
-    setRendering(true);
-    setTimeout(() => setRendering(false), 3000);
+  const handleGenerateImage = () => {
+    if (!render) return;
+    // Save draft first, then generate
+    handleSaveDraft();
+    generateImage.mutate(render.id);
   };
+
+  const handleApproveImage = () => {
+    if (!render || !assetId) return;
+    approveImage.mutate({ renderId: render.id, assetId });
+  };
+
+  if (assetLoading || renderLoading) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-[50vh]">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!asset) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Asset no encontrado.
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -57,7 +116,7 @@ const Studio = () => {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-bold text-foreground">Studio</h1>
-            <StatusBadge status={imageApproved ? "IMAGE_APPROVED" : imageGenerated ? "BLUEPRINT_GENERATED" : "DRAFT"} />
+            <StatusBadge status={render?.status === "IMAGE_APPROVED" ? "IMAGE_APPROVED" : render?.status === "IMAGE_GENERATED" ? "BLUEPRINT_GENERATED" : "DRAFT"} />
           </div>
           <p className="text-sm text-muted-foreground">Modulá guion, actor, voz y escenario</p>
         </div>
@@ -92,7 +151,7 @@ const Studio = () => {
               </Select>
             </div>
 
-            {level === "1" && (
+            {level === "1" && !asset.rights_confirmed && (
               <div className="bg-warning/10 border border-warning/20 rounded-lg p-3 text-xs text-warning">
                 Nivel 1 requiere confirmación de derechos en la ingesta.
               </div>
@@ -101,6 +160,7 @@ const Studio = () => {
             <Textarea
               value={script}
               onChange={(e) => setScript(e.target.value)}
+              placeholder="Escribí el guion del video aquí…"
               className="min-h-[200px] text-sm bg-muted/30 border-border font-mono resize-none"
             />
 
@@ -109,7 +169,14 @@ const Studio = () => {
               <span>~{estDuration}s estimado</span>
             </div>
 
-            <Button variant="outline" size="sm" className="w-full text-xs">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full text-xs"
+              onClick={handleSaveDraft}
+              disabled={!render || updateRender.isPending}
+            >
+              {updateRender.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
               Guardar Borrador
             </Button>
           </div>
@@ -184,7 +251,7 @@ const Studio = () => {
           </div>
         </motion.div>
 
-        {/* Column 3: Scenario + Product */}
+        {/* Column 3: Scenario + Product + Image */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="space-y-4">
           <div className="rounded-xl border border-border gradient-card p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
@@ -197,6 +264,7 @@ const Studio = () => {
               <Textarea
                 value={scenario}
                 onChange={(e) => setScenario(e.target.value)}
+                placeholder="Ej: Baño moderno con luz natural suave"
                 className="min-h-[70px] text-sm bg-muted/30 border-border resize-none"
               />
             </div>
@@ -220,11 +288,16 @@ const Studio = () => {
             {!imageGenerated ? (
               <div className="space-y-3">
                 <CostDisplay amount="~$0.08" label="generación imagen" size="sm" />
-                <Button onClick={handleGenerateImage} disabled={generating} className="w-full gap-2" size="sm">
-                  {generating ? (
+                <Button
+                  onClick={handleGenerateImage}
+                  disabled={generateImage.isPending || !render}
+                  className="w-full gap-2"
+                  size="sm"
+                >
+                  {generateImage.isPending ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Generando…
+                      Generando (~60s)…
                     </>
                   ) : (
                     "Generar Imagen Base"
@@ -233,15 +306,31 @@ const Studio = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="aspect-[9/16] bg-muted rounded-lg flex items-center justify-center border border-border">
-                  <div className="text-center">
-                    <Image className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <span className="text-xs text-muted-foreground">Preview imagen base</span>
+                {render?.base_image_url ? (
+                  <div className="aspect-[9/16] rounded-lg overflow-hidden border border-border">
+                    <img
+                      src={render.base_image_url}
+                      alt="Base image preview"
+                      className="w-full h-full object-cover"
+                    />
                   </div>
-                </div>
+                ) : (
+                  <div className="aspect-[9/16] bg-muted rounded-lg flex items-center justify-center border border-border">
+                    <div className="text-center">
+                      <Image className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                      <span className="text-xs text-muted-foreground">Preview imagen base</span>
+                    </div>
+                  </div>
+                )}
                 {!imageApproved ? (
-                  <Button onClick={() => setImageApproved(true)} variant="outline" className="w-full gap-2 border-success text-success hover:bg-success/10" size="sm">
-                    <Check className="w-4 h-4" />
+                  <Button
+                    onClick={handleApproveImage}
+                    disabled={approveImage.isPending}
+                    variant="outline"
+                    className="w-full gap-2 border-success text-success hover:bg-success/10"
+                    size="sm"
+                  >
+                    {approveImage.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                     Aprobar Imagen
                   </Button>
                 ) : (
@@ -260,18 +349,9 @@ const Studio = () => {
                 <p className="text-xs text-muted-foreground">
                   Aprobá la imagen antes de renderizar: así controlás calidad y costo.
                 </p>
-                <Button onClick={handleRender} disabled={rendering} className="w-full gap-2">
-                  {rendering ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Renderizando (~45s)…
-                    </>
-                  ) : (
-                    <>
-                      Generar Video Final
-                      <Film className="w-4 h-4" />
-                    </>
-                  )}
+                <Button disabled className="w-full gap-2">
+                  Generar Video Final
+                  <Film className="w-4 h-4" />
                 </Button>
               </div>
             </motion.div>
