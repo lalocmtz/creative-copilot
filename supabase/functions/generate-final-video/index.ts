@@ -50,21 +50,11 @@ Deno.serve(async (req) => {
     const baseImageUrl = render.base_image_url;
     if (!baseImageUrl) return json({ error: "No base image URL" }, 400);
 
-    // Read source video duration from asset metadata
-    const { data: assetData } = await supabaseAdmin.from("assets").select("metadata_json").eq("id", assetId).single();
-    const rawDuration = (assetData?.metadata_json as any)?.duration;
-    const sourceDuration = typeof rawDuration === "number" ? rawDuration : 30;
-    const MAX_DURATION = 30;
-    const MIN_DURATION = 3;
-    const effectiveDuration = Math.max(MIN_DURATION, Math.min(sourceDuration, MAX_DURATION));
-    const durationCapped = sourceDuration > MAX_DURATION;
-    console.log(`[KICKOFF] Source duration: ${sourceDuration}s, effective: ${effectiveDuration}s, capped: ${durationCapped}`);
-
     // Set status to RENDERING
     await supabaseAdmin.from("renders").update({ status: "RENDERING" }).eq("id", render_id);
 
     // Idempotency check
-    const idempotencyKey = `motion_transfer:${render_id}`;
+    const idempotencyKey = `image_to_video:${render_id}`;
     const { data: existingJob } = await supabaseAdmin.from("jobs").select("*").eq("idempotency_key", idempotencyKey).eq("status", "DONE").maybeSingle();
     if (existingJob) return json({ message: "Already completed", job: existingJob });
 
@@ -74,28 +64,7 @@ Deno.serve(async (req) => {
       { onConflict: "idempotency_key" }
     ).select().single();
 
-    // Step 1: Get signed URL for source video
-    const sourceVideoPath = `${userId}/${assetId}/source.mp4`;
-    const { data: signedData, error: signErr } = await supabaseAdmin.storage
-      .from("ugc-assets")
-      .createSignedUrl(sourceVideoPath, 60 * 60); // 1 hour
-    if (signErr || !signedData?.signedUrl) throw new Error(`Failed to get source video URL: ${signErr?.message}`);
-    const sourceVideoUrl = signedData.signedUrl;
-    console.log("[KICKOFF] Source video signed URL obtained");
-
-    // Step 2: Upload source video to KIE AI file service
-    const videoFileName = `source_${render_id}.mp4`;
-    const uploadVideoRes = await fetch(KIE_FILE_UPLOAD, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUrl: sourceVideoUrl, uploadPath: videoFileName }),
-    });
-    const uploadVideoData = await uploadVideoRes.json();
-    const kieVideoUrl = uploadVideoData?.data?.downloadUrl || uploadVideoData?.data?.url;
-    if (!kieVideoUrl) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
-    console.log("[KICKOFF] Source video uploaded to KIE:", kieVideoUrl);
-
-    // Step 3: Upload base image to KIE AI file service
+    // Step 1: Upload base image to KIE AI file service
     const imageFileName = `base_${render_id}.jpg`;
     const uploadImageRes = await fetch(KIE_FILE_UPLOAD, {
       method: "POST",
@@ -107,53 +76,48 @@ Deno.serve(async (req) => {
     if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
-    // Step 4: Create motion control task (Kling 2.6) — max 30s
-    const motionPrompt = render.scenario_prompt
-      ? `A person in ${render.scenario_prompt}. Natural movement and expression.`
-      : "A person speaking naturally with expressive gestures.";
+    // Step 2: Create image-to-video task (Kling 2.6)
+    const animPrompt = render.scenario_prompt
+      ? `A person naturally presenting a product in ${render.scenario_prompt}. Subtle natural movement, gentle head turns, slight hand gestures, natural blinking. Cinematic lighting, 9:16 vertical format.`
+      : "A person speaking naturally to camera with subtle movements, gentle head turns, natural blinking, slight hand gestures. Warm lighting, 9:16 vertical format.";
 
-    const motionInput: Record<string, unknown> = {
-      input_urls: [kieImageUrl],
-      video_urls: [kieVideoUrl],
-      character_orientation: "video",
-      mode: "720p",
-      prompt: motionPrompt,
-    };
+    console.log(`[KICKOFF] Creating image-to-video task with prompt: ${animPrompt.substring(0, 80)}...`);
 
-    const motionRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
+    const taskRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "kling-2.6/motion-control",
-        input: motionInput,
+        model: "kling-2.6/image-to-video",
+        input: {
+          prompt: animPrompt,
+          image_urls: [kieImageUrl],
+          duration: "5",
+          sound: false,
+        },
       }),
     });
-    const motionData = await motionRes.json();
-    if (motionData.code !== 200) throw new Error(`Motion control task failed: ${motionData.msg}`);
-    const motionTaskId = motionData.data.taskId;
-    console.log(`[KICKOFF] Motion control task started: ${motionTaskId}`);
+    const taskData = await taskRes.json();
+    if (taskData.code !== 200) throw new Error(`Image-to-video task failed: ${taskData.msg}`);
+    const taskId = taskData.data.taskId;
+    console.log(`[KICKOFF] Image-to-video task started: ${taskId}`);
 
     // Save task ID and progress
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
-        _tasks: { motion_task_id: motionTaskId },
+        _tasks: { video_task_id: taskId },
         _progress: {
-          step: "motion_starting",
-          detail: durationCapped
-            ? `Iniciando motion transfer (${effectiveDuration}s de ${sourceDuration}s originales)…`
-            : `Iniciando transferencia de movimiento (${effectiveDuration}s)…`,
+          step: "video_starting",
+          detail: "Iniciando generación de video (5s)…",
           updated_at: new Date().toISOString(),
         },
         _job_id: job?.id,
         _image_url: baseImageUrl,
-        _source_video_path: sourceVideoPath,
         _user_id: userId,
         _asset_id: assetId,
-        _duration: { source: sourceDuration, effective: effectiveDuration, capped: durationCapped },
       },
     }).eq("id", render_id);
 
-    return json({ started: true, motion_task_id: motionTaskId });
+    return json({ started: true, task_id: taskId });
   } catch (err: any) {
     console.error("[ERROR]", err.message);
     try {

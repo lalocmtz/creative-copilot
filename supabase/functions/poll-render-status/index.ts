@@ -69,39 +69,39 @@ Deno.serve(async (req) => {
     if (render.status !== "RENDERING") return json({ status: render.status, step: "done" });
 
     const breakdown = render.cost_breakdown_json as any;
-    const tasks = breakdown?._tasks;
-    if (!tasks) return json({ error: "No task data found" }, 400);
-
-    const motionTaskId = tasks.motion_task_id;
-    if (!motionTaskId) return json({ error: "No motion task ID found" }, 400);
-
-    // Check motion control task status
-    console.log(`[POLL] Checking motion task: ${motionTaskId}`);
-    const motionStatus = await checkTask(motionTaskId, KIE_API_KEY);
-
-    if (motionStatus.state === "fail") {
-      await supabaseAdmin.from("renders").update({
-        status: "FAILED",
-        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Motion transfer failed: ${motionStatus.failMsg}` } },
-      }).eq("id", render_id);
-      return json({ status: "FAILED", step: "failed", detail: motionStatus.failMsg });
+    if (!breakdown?._tasks) {
+      // No task data — render is stuck from a previous failed attempt
+      return json({ error: "No task data found. Use retry to reset this render.", status: "STUCK" }, 400);
     }
 
-    if (motionStatus.state !== "success") {
-      // Still processing
+    const videoTaskId = breakdown._tasks.video_task_id || breakdown._tasks.motion_task_id;
+    if (!videoTaskId) return json({ error: "No video task ID found" }, 400);
+
+    console.log(`[POLL] Checking video task: ${videoTaskId}`);
+    const taskStatus = await checkTask(videoTaskId, KIE_API_KEY);
+
+    if (taskStatus.state === "fail") {
+      await supabaseAdmin.from("renders").update({
+        status: "FAILED",
+        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Video generation failed: ${taskStatus.failMsg}` } },
+      }).eq("id", render_id);
+      return json({ status: "FAILED", step: "failed", detail: taskStatus.failMsg });
+    }
+
+    if (taskStatus.state !== "success") {
       await supabaseAdmin.from("renders").update({
         cost_breakdown_json: {
           ...breakdown,
-          _progress: { step: "motion_transferring", detail: "Transfiriendo movimiento (~3-5 min)…", updated_at: new Date().toISOString() },
+          _progress: { step: "generating_video", detail: "Generando video (~2-4 min)…", updated_at: new Date().toISOString() },
         },
       }).eq("id", render_id);
-      return json({ status: "RENDERING", step: "motion_transferring" });
+      return json({ status: "RENDERING", step: "generating_video" });
     }
 
-    // Motion transfer done! Download and finalize
-    console.log("[POLL] Motion transfer complete! Finalizing...");
-    const videoFileUrl = motionStatus.resultJson?.resultUrls?.[0];
-    if (!videoFileUrl) throw new Error("Motion transfer returned no URL");
+    // Video done! Download and finalize
+    console.log("[POLL] Video generation complete! Finalizing...");
+    const videoFileUrl = taskStatus.resultJson?.resultUrls?.[0];
+    if (!videoFileUrl) throw new Error("Video generation returned no URL");
 
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
@@ -113,7 +113,6 @@ Deno.serve(async (req) => {
     const userId = breakdown._user_id;
     const assetId = breakdown._asset_id;
 
-    // Download and upload final video
     const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
     const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
     const videoPath = `${userId}/${assetId}/renders/${render_id}/video.mp4`;
@@ -126,22 +125,20 @@ Deno.serve(async (req) => {
     }).eq("id", render_id);
 
     await supabaseAdmin.storage.from("ugc-assets").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-
-    // Get signed URL for the final video
     const { data: videoSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(videoPath, 60 * 60 * 24 * 7);
 
-    // Get signed URL for the source audio (original video)
-    const sourceVideoPath = breakdown._source_video_path || `${userId}/${assetId}/source.mp4`;
+    // Get source audio signed URL
+    const sourceVideoPath = `${userId}/${assetId}/source.mp4`;
     const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(sourceVideoPath, 60 * 60 * 24 * 7);
 
-    const totalCost = 0.45; // ~$0.023/s × 20s at 720p (económico)
+    const totalCost = 0.10; // ~$0.10 for 5s image-to-video at 720p
 
     await supabaseAdmin.from("renders").update({
       status: "DONE",
       final_video_url: videoSigned?.signedUrl || videoFileUrl,
       render_cost: totalCost,
       cost_breakdown_json: {
-        motion_transfer: { provider: "kling", model: "2.6-motion-control", mode: "720p", estimated_usd: totalCost },
+        image_to_video: { provider: "kling", model: "2.6-image-to-video", duration: "5s", estimated_usd: totalCost },
         audio_url: audioSigned?.signedUrl,
         total_usd: totalCost,
       },
@@ -152,12 +149,12 @@ Deno.serve(async (req) => {
     if (breakdown._job_id) {
       await supabaseAdmin.from("jobs").update({
         status: "DONE",
-        cost_json: { motion_transfer: totalCost, total: totalCost },
-        provider_job_id: `motion:${motionTaskId}`,
+        cost_json: { image_to_video: totalCost, total: totalCost },
+        provider_job_id: `i2v:${videoTaskId}`,
       }).eq("id", breakdown._job_id);
     }
 
-    console.log("[POLL] Motion transfer pipeline complete!");
+    console.log("[POLL] Image-to-video pipeline complete!");
     return json({ status: "DONE", video_url: videoSigned?.signedUrl, audio_url: audioSigned?.signedUrl, cost: totalCost });
   } catch (err: any) {
     console.error("[POLL ERROR]", err.message);
