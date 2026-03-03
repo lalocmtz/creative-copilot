@@ -23,6 +23,46 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
+// ─── Video + Audio Overlay Component ───
+const VideoWithAudioOverlay = ({ videoUrl, audioUrl }: { videoUrl: string; audioUrl?: string }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  const syncPlay = () => {
+    if (audioRef.current && videoRef.current) {
+      audioRef.current.currentTime = videoRef.current.currentTime;
+      audioRef.current.play().catch(() => {});
+    }
+  };
+  const syncPause = () => { audioRef.current?.pause(); };
+  const syncSeek = () => {
+    if (audioRef.current && videoRef.current) {
+      audioRef.current.currentTime = videoRef.current.currentTime;
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="aspect-[9/16] max-h-[400px] rounded-lg overflow-hidden border border-border bg-black">
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          controls
+          className="w-full h-full object-contain"
+          onPlay={syncPlay}
+          onPause={syncPause}
+          onSeeked={syncSeek}
+        />
+      </div>
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" />}
+      <a href={videoUrl} target="_blank" rel="noopener noreferrer">
+        <Button variant="outline" size="sm" className="w-full gap-2"><Film className="w-4 h-4" /> Descargar Video</Button>
+      </a>
+      <p className="text-xs text-success text-center font-medium">✓ Video animado + voiceover</p>
+    </div>
+  );
+};
+
 // ─── Static Data ───
 const actors = [
   { id: "a1", name: "Sofia M.", style: "Natural, cercana", gender: "femenino" },
@@ -167,7 +207,7 @@ const Workspace = () => {
       }
     };
     poll();
-    pollIntervalRef.current = setInterval(poll, 10000);
+    pollIntervalRef.current = setInterval(poll, 5000);
     return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
   }, [render?.status, render?.id]);
 
@@ -600,15 +640,11 @@ const Workspace = () => {
                 </h3>
 
                 {videoDone && render?.final_video_url ? (
-                  <div className="space-y-3">
-                    <div className="aspect-[9/16] max-h-[400px] rounded-lg overflow-hidden border border-border bg-black">
-                      <video src={render.final_video_url} controls className="w-full h-full object-contain" />
-                    </div>
-                    <a href={render.final_video_url} target="_blank" rel="noopener noreferrer">
-                      <Button variant="outline" size="sm" className="w-full gap-2"><Film className="w-4 h-4" /> Descargar Video</Button>
-                    </a>
-                    <p className="text-xs text-success text-center font-medium">✓ Video con audio integrado</p>
-                  </div>
+                  <VideoWithAudioOverlay
+                    videoUrl={render.final_video_url}
+                    audioUrl={(render.cost_breakdown_json as any)?._tts_audio_url}
+                  />
+                  
                 ) : (
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground text-center">Genera voz + sincroniza labios + audio integrado</p>
