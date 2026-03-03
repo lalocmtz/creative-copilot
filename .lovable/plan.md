@@ -1,63 +1,90 @@
 
+# Auto-Populate Studio from Blueprint Data
 
-# Phase 5: Base Image Generation with KIE AI
+## Current Problem
+When you open the Studio, everything is empty because:
+1. The `generate-blueprint` edge function doesn't exist yet (Phase 3 was not implemented)
+2. Without a blueprint, the Studio has no data to pre-fill the script, actor, scenario, etc.
+3. The asset is stuck at `VIDEO_INGESTED` status -- it needs blueprint generation first
 
-## Overview
-Create an edge function `generate-base-image` that uses the KIE AI API (Flux Kontext or GPT-4o Image model) to generate a base image for the UGC render. Wire it to the Studio page so the "Generar Imagen Base" button actually works end-to-end.
+## What Needs to Happen
 
-## Secret Required
-- **KIE_AI_API_KEY** -- You'll need to provide your KIE AI API key (from https://kie.ai/api-key). I'll prompt you for it during implementation.
+### 1. Create `generate-blueprint` Edge Function
+Use Lovable AI (Gemini) to analyze the transcript and auto-generate:
+- The exact script (cloned from the original transcript)
+- Actor gender detection (from transcript/context clues)
+- A similar-but-different scenario description
+- An extensive, detailed prompt for base image generation
+- 3 variation levels with adjusted scripts
+- Risk/policy warnings
 
-## Changes
+No external API key needed -- uses Lovable AI's built-in Gemini model.
 
-### 1. Edge Function: `supabase/functions/generate-base-image/index.ts`
-- Accept `{ render_id }` from authenticated user
-- Validate the render exists, belongs to user's asset, and `render.status = 'DRAFT'`
-- Build an image generation prompt from: actor description + scenario prompt + emotional intensity + product context
-- Call KIE AI `POST https://api.kie.ai/api/v1/flux/kontext/generate` with the prompt
-- Poll `GET https://api.kie.ai/api/v1/flux/kontext/record-info?taskId=...` every 5s until success/fail (max ~2 min)
-- Download the generated image, upload to Supabase Storage (`ugc-assets/{user_id}/{asset_id}/base-image-{render_id}.png`)
-- Update `renders.base_image_url` with a signed URL
-- Update `renders.status` to `IMAGE_GENERATED`
-- Create a job record for cost tracking (`type: 'base_image'`)
-- Return the image URL + cost info
+### 2. Auto-populate Studio from Blueprint
+When Studio loads and a blueprint exists:
+- **Script**: Pre-fill with the Nivel 1 variation (exact clone of the original script)
+- **Actor**: Auto-select based on detected gender from the blueprint analysis
+- **Scenario**: Pre-fill with the AI-generated scenario description
+- **Voice**: Auto-select matching voice based on detected gender
+- **Emotional intensity**: Set from the blueprint's detected emotional level
 
-### 2. Register in `supabase/config.toml`
+### 3. Improve the Flow
+- Blueprint page gets a "Generate Blueprint" button that calls the new edge function
+- Once generated, "Abrir Studio" navigates to Studio with everything pre-filled
+- User only needs to optionally upload product image, tweak settings, and hit "Generar Imagen Base"
+
+## Technical Steps
+
+### Step 1: Edge Function `supabase/functions/generate-blueprint/index.ts`
+- Accepts `{ asset_id, force?: boolean }`
+- Validates asset status is at least `VIDEO_INGESTED`
+- Calls Lovable AI (Gemini 2.5 Flash) with the transcript
+- Prompt instructs the LLM to:
+  - Clone the exact script as Nivel 1
+  - Detect speaker gender and appearance hints
+  - Generate a detailed scenario prompt for image generation
+  - Create 3 variation levels
+  - Flag policy risks
+- Saves `analysis_json` and `variations_json` to the `blueprints` table
+- Updates asset status to `BLUEPRINT_GENERATED`
+- Creates a job record for cost tracking
+
+### Step 2: Blueprint Page -- Add "Generate Blueprint" button
+- Show "Generar Blueprint" button when no blueprint exists
+- Cost estimate displayed before execution (~$0.02)
+- Loading state during generation
+- On success, show the full analysis
+
+### Step 3: Studio Auto-Population
+- Fetch the blueprint when Studio loads
+- Extract the Nivel 1 script and pre-fill the script textarea
+- Map detected gender to actor/voice selection
+- Pre-fill scenario from blueprint's `escenario_sugerido` field
+- Set emotional intensity from blueprint's detected level
+- Save all this to the render draft automatically
+
+### Blueprint JSON Schema (what the LLM returns)
 ```text
-[functions.generate-base-image]
-verify_jwt = false
+analysis_json: {
+  hook, angulo, emocion_dominante, mecanismo,
+  genero_detectado: "femenino" | "masculino",
+  escenario_sugerido: "detailed scenario description...",
+  intensidad_emocional: 70,
+  estructura_beats: [...],
+  riesgos_politica: [...],
+  sugerencia_mejora_retencion: "..."
+}
+
+variations_json: [
+  { nivel: 1, titulo: "Clon exacto", guion: "exact transcript...", cambios_clave: [] },
+  { nivel: 2, titulo: "Variacion moderada", guion: "...", cambios_clave: [...] },
+  { nivel: 3, titulo: "Nuevo enfoque", guion: "...", cambios_clave: [...] }
+]
 ```
 
-### 3. Wire Studio page (`src/pages/Studio.tsx`)
-- Load real asset + render data from Supabase using route param `asset_id`
-- "Generar Imagen Base" button calls the edge function with the render ID
-- Show polling/loading state while KIE AI generates
-- Display the actual generated image (not placeholder)
-- "Aprobar Imagen" updates `renders.status` to `IMAGE_APPROVED` and `assets.status` to `IMAGE_APPROVED`
-- Create render draft in DB when user first enters Studio (if none exists)
-
-### 4. Create render draft flow
-- When Studio loads for an asset with `status >= BLUEPRINT_GENERATED` and no render exists, auto-create a `DRAFT` render record
-- Save draft updates (script, actor, voice, intensity, scenario) to the render record
-
-## API Flow (KIE AI)
-```text
-1. POST https://api.kie.ai/api/v1/flux/kontext/generate
-   Headers: Authorization: Bearer {KIE_AI_API_KEY}
-   Body: { prompt, aspectRatio: "9:16", model: "flux-kontext-pro" }
-   Response: { code: 200, data: { taskId: "..." } }
-
-2. Poll GET .../record-info?taskId=...
-   Status 0 = generating, 1 = success, 2 = create failed, 3 = generate failed
-   On success: data.info.images[0] has the URL
-
-3. Download image -> upload to Storage -> signed URL -> save to renders
-```
-
-## Task Sequence
-1. Request KIE_AI_API_KEY secret from user
-2. Create `generate-base-image` edge function
-3. Update `config.toml` with new function entry
-4. Wire Studio page to real data + edge function calls
-5. Deploy and test
-
+### Files to Create/Edit
+- **New**: `supabase/functions/generate-blueprint/index.ts`
+- **Edit**: `src/pages/Blueprint.tsx` -- add generate button
+- **Edit**: `src/pages/Studio.tsx` -- auto-populate from blueprint data
+- **Edit**: `src/hooks/useSupabaseQueries.ts` -- add generate blueprint mutation
+- **Edit**: `docs/tasks.md` -- mark Phase 3 tasks
