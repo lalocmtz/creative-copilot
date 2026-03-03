@@ -404,46 +404,75 @@ interface BlueprintVariation {
 ---
 
 ### 3.3 Blueprint Viewer Component
-- [ ] Create `BlueprintViewer` component with 3 tabs:
-  - **Análisis**: hook, ángulo, emoción, mecanismo, beats timeline
-  - **Variaciones**: 3 cards with nivel, título, guión, cambios clave
+- [x] Create `BlueprintViewer` component with 3 tabs:
+  - **Análisis**: hook, ángulo, emoción, mecanismo, beats timeline, intensidad emocional
+  - **Variaciones**: 3 cards with nivel, título, guión, cambios clave, word count + estimated duration
   - **Riesgos**: política warnings + mejora retención suggestion
-- [ ] Highlight `riesgos_politica` with warning styling
-- [ ] Each variation card shows word count + estimated duration
+- [x] Highlight `riesgos_politica` with warning styling
+- [x] Each variation card shows word count + estimated duration
 
 ---
 
 ## Checkpoint: Phase 1–3 Verification
 
 After completing all above:
-- [ ] Can sign up / login / logout
-- [ ] Can create asset from URL → see real ingest pipeline progress
-- [ ] Transcript cached — re-submitting same URL skips Whisper
-- [ ] Can generate blueprint → see analysis + 3 variations
-- [ ] Regenerate blueprint requires confirmation modal
-- [ ] All costs visible at every step
-- [ ] Dashboard shows real asset list with statuses
-- [ ] rights_confirmed checkbox persists and gates Nivel 1
+- [x] Can sign up / login / logout
+- [x] Can create asset from URL → see real ingest pipeline progress
+- [x] Transcript cached — re-submitting same URL skips Whisper
+- [x] Can generate blueprint → see analysis + 3 variations
+- [x] Regenerate blueprint requires confirmation modal
+- [x] All costs visible at every step
+- [x] Dashboard shows real asset list with statuses
+- [x] rights_confirmed checkbox persists and gates Nivel 1
 
 ---
 
-## Future Phases (not yet detailed)
+## Phase 4 — Studio + Drafts ✅
 
-### Phase 4 — Studio + Drafts
-- Studio 3-column layout wired to real renders table
-- Zustand studioStore ↔ DB persistence
-- Word counter + duration estimator
-- Nivel 1 gating by `rights_confirmed`
+- [x] Studio 3-column layout wired to real renders table
+- [x] Zustand studioStore ↔ DB persistence
+- [x] Word counter + duration estimator
+- [x] Nivel 1 gating by `rights_confirmed`
+- [x] Actor picker, voice picker, emotional intensity slider
+- [x] Scenario input + product image uploader
+- [x] Save draft functionality
 
 ### Phase 5 — Base Image Generation ✅
-- ~~Edge function for Grok Imagine~~ → Replaced with Lovable AI (gemini-3-pro-image-preview)
-- ✅ Visual-faithful generation: Gemini analyzes original video frame during blueprint to produce scene-accurate `escenario_sugerido`
-- ✅ Reference-based image generation: original video sent as reference to replicate exact composition/distance/lighting with different person
-- ✅ KIE AI removed, replaced with Lovable AI image generation
-- Image approval flow
-- Cost tracking per image
 
-### Phase 6 — Final Render Pipeline
-- TTS (ElevenLabs) → Video (Kling/Veo) → LipSync → Merge
-- Full cost breakdown
-- Download + duplicate render
+- [x] Visual-faithful generation: Gemini analyzes original video frame during blueprint to produce scene-accurate `escenario_sugerido`
+- [x] Reference-based image generation: original video sent as reference to replicate exact composition/distance/lighting with different person
+- [x] Lovable AI (gemini-3-pro-image-preview) for image generation
+- [x] Image approval flow
+- [x] Cost tracking per image
+- [x] Storage RLS policies for user uploads
+
+### Phase 6 — Final Render Pipeline ✅
+
+- [x] Edge function `generate-final-video` orchestrates TTS → Video pipeline
+- [x] TTS via KIE AI (ElevenLabs text-to-speech-turbo-2-5)
+- [x] Image-to-Video via KIE AI (Kling v2.1 Master)
+- [x] Polling with progress tracking (step-by-step updates to DB)
+- [x] Frontend polling every 5s during RENDERING status
+- [x] RenderProgressPanel component with step indicators
+- [x] Audio + video download on completion
+- [x] Full cost breakdown display
+- [x] Idempotency + job tracking
+
+---
+
+## Future Phases
+
+### Phase 7 — LipSync + Audio Merge
+- [ ] LipSync integration (Kling 2.6 Motion Control or dedicated API)
+- [ ] Merge TTS audio with generated video for synchronized output
+- [ ] Update cost breakdown with lipsync costs
+
+### Phase 8 — Batch Mode ("Línea de Producción")
+- [ ] Preset builder (actor/voice/intensity/scenario templates)
+- [ ] Queue view with per-item cost + status
+- [ ] Batch processing with parallel renders
+
+### Phase 9 — Audit & Costs Dashboard
+- [ ] Costs endpoint aggregating per stage
+- [ ] Cost audit panel in UI
+- [ ] Per-asset cost history
