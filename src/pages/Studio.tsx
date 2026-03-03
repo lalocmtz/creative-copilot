@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import PipelineStepper from "@/components/PipelineStepper";
 import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
-import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-react";
+import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2, AlertTriangle } from "lucide-react";
 import RenderProgressPanel from "@/components/RenderProgressPanel";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
@@ -546,7 +546,24 @@ const Studio = () => {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <CostDisplay amount="~$0.90" label="motion transfer (1080p)" size="md" />
+                    {(() => {
+                      const dur = (asset.metadata_json as any)?.duration;
+                      const sourceDur = typeof dur === "number" ? dur : null;
+                      const capped = sourceDur && sourceDur > 30;
+                      const effectiveDur = capped ? 30 : (sourceDur || 30);
+                      const estCost = (effectiveDur / 30 * 0.90).toFixed(2);
+                      return (
+                        <>
+                          {capped && (
+                            <div className="flex items-start gap-2 bg-warning/10 border border-warning/20 rounded-lg p-3 text-xs text-warning">
+                              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                              <span>El video original dura {Math.round(sourceDur)}s. Se procesarán los primeros 30s.</span>
+                            </div>
+                          )}
+                          <CostDisplay amount={`~$${estCost}`} label={`motion transfer (${effectiveDur}s, 1080p)`} size="md" />
+                        </>
+                      );
+                    })()}
                     <p className="text-[10px] text-muted-foreground text-center">
                       Transferencia estructural — misma duración y gestos del video original
                     </p>
