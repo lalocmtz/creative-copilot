@@ -282,7 +282,7 @@ CREATE POLICY "Service role can manage files"
 - [x] Accept `{ asset_id }`, validate ownership via JWT
 - [x] Check cache: if `source_hash` exists with transcript → skip, return cached
 - [x] Create job record with `idempotency_key = download_video:{asset_id}:{source_hash}`
-- [x] Call Apify to download TikTok video → upload to Supabase Storage (`ugc-assets/{user_id}/{asset_id}/source.mp4`)
+- [x] Call RapidAPI to download TikTok video → upload to Supabase Storage (`ugc-assets/{user_id}/{asset_id}/source.mp4`)
 - [x] Save `metadata_json.video_url`, `metadata_json.duration`, `metadata_json.resolution`
 - [x] Create job for transcription with `idempotency_key = transcribe:{asset_id}:{source_hash}`
 - [x] Call Whisper API → save `transcript` on asset
@@ -290,8 +290,8 @@ CREATE POLICY "Service role can manage files"
 - [x] Return updated asset + jobs with costs
 
 #### Secrets Needed
-- `APIFY_API_KEY` — for TikTok video download ⚠️ PENDING
-- `OPENAI_API_KEY` — for Whisper transcription ⚠️ PENDING
+- `RAPIDAPI_KEY` — for TikTok video download ✅ Configured
+- `OPENAI_API_KEY` — for Whisper transcription ✅ Configured
 
 #### Idempotency Pattern (edge function pseudocode)
 ```typescript
