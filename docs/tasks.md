@@ -259,19 +259,19 @@ CREATE POLICY "Service role can manage files"
 ---
 
 ### 1.3 Frontend State Management
-- [ ] Install Zustand
-- [ ] Create `assetStore` (current asset + blueprint + status cache)
-- [ ] Create `studioStore` (render draft: level, actor, voice, intensity, scenario, product)
-- [ ] Persist drafts to localStorage; DB is source of truth on Save
+- [x] Install Zustand
+- [x] Create `assetStore` (current asset + blueprint + status cache)
+- [x] Create `studioStore` (render draft: level, actor, voice, intensity, scenario, product)
+- [x] Persist drafts to localStorage; DB is source of truth on Save
 
 > **Ref**: Custom knowledge > Zustand Stores section
 
 ---
 
 ### 1.4 Supabase Client Integration
-- [ ] Generate TypeScript types from DB schema (`src/integrations/supabase/types.ts`)
-- [ ] Create helper hooks: `useAssets()`, `useAsset(id)`, `useBlueprint(assetId)`, `useJobs(assetId)`
-- [ ] Use React Query for server state, Zustand for UI drafts
+- [x] Generate TypeScript types from DB schema (`src/integrations/supabase/types.ts`)
+- [x] Create helper hooks: `useAssets()`, `useAsset(id)`, `useBlueprint(assetId)`, `useJobs(assetId)`
+- [x] Use React Query for server state, Zustand for UI drafts
 
 ---
 
