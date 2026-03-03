@@ -142,12 +142,14 @@ Deno.serve(async (req) => {
 
         videoUrl = signedUrlData.signedUrl;
 
-        // Update asset metadata
+        // Update asset metadata (include music_url for transcription)
+        const musicUrl = videoInfo.music || videoInfo.music_info?.play || null;
         await supabase
           .from("assets")
           .update({
             metadata_json: {
               video_url: videoUrl,
+              music_url: musicUrl,
               duration: videoInfo.duration || null,
               resolution: videoInfo.height
                 ? `${videoInfo.width}x${videoInfo.height}`
@@ -225,16 +227,25 @@ Deno.serve(async (req) => {
           throw new Error("OPENAI_API_KEY no configurado. Agrega el secret en la configuración.");
         }
 
-        // Download video for transcription
-        if (!videoUrl) throw new Error("No hay URL de video para transcribir");
+        // Prefer audio track (smaller) over full video to stay under Whisper's 25MB limit
+        const freshAsset = await supabase.from("assets").select("metadata_json").eq("id", asset_id).single();
+        const meta = freshAsset.data?.metadata_json as Record<string, unknown> | null;
+        const audioSource = (meta?.music_url as string) || videoUrl;
+        if (!audioSource) throw new Error("No hay URL de audio/video para transcribir");
 
-        const videoForTranscript = await fetch(videoUrl);
-        if (!videoForTranscript.ok) throw new Error("Error descargando video para transcripción");
-        const videoBytes = await videoForTranscript.arrayBuffer();
+        const audioResponse = await fetch(audioSource);
+        if (!audioResponse.ok) throw new Error("Error descargando audio para transcripción");
+        const audioBytes = await audioResponse.arrayBuffer();
+
+        // Check size — Whisper limit is 25MB
+        if (audioBytes.byteLength > 25 * 1024 * 1024) {
+          throw new Error(`Archivo demasiado grande para Whisper (${(audioBytes.byteLength / 1024 / 1024).toFixed(1)}MB). Límite: 25MB.`);
+        }
 
         // Call Whisper API
         const formData = new FormData();
-        formData.append("file", new Blob([videoBytes], { type: "video/mp4" }), "audio.mp4");
+        const isAudio = audioSource === (meta?.music_url as string);
+        formData.append("file", new Blob([audioBytes], { type: isAudio ? "audio/mpeg" : "video/mp4" }), isAudio ? "audio.mp3" : "audio.mp4");
         formData.append("model", "whisper-1");
         formData.append("language", "es");
 
