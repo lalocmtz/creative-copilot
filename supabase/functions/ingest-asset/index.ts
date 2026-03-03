@@ -81,38 +81,43 @@ Deno.serve(async (req) => {
         .single();
 
       try {
-        const apifyKey = Deno.env.get("APIFY_API_KEY");
-        if (!apifyKey) {
-          throw new Error("APIFY_API_KEY no configurado. Agrega el secret en la configuración.");
+        const rapidApiKey = Deno.env.get("RAPIDAPI_KEY");
+        if (!rapidApiKey) {
+          throw new Error("RAPIDAPI_KEY no configurado. Agrega el secret en la configuración.");
         }
 
-        // Call Apify TikTok scraper
-        const apifyResponse = await fetch(
-          `https://api.apify.com/v2/acts/clockworks~free-tiktok-scraper/run-sync-get-dataset-items?token=${apifyKey}`,
+        // Call RapidAPI TikTok download
+        const encodedUrl = encodeURIComponent(asset.source_url);
+        const rapidResponse = await fetch(
+          `https://tiktok-download-video1.p.rapidapi.com/getVideo?url=${encodedUrl}&hd=1`,
           {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              postURLs: [asset.source_url],
-              resultsPerPage: 1,
-            }),
+            method: "GET",
+            headers: {
+              "x-rapidapi-host": "tiktok-download-video1.p.rapidapi.com",
+              "x-rapidapi-key": rapidApiKey,
+            },
           }
         );
 
-        if (!apifyResponse.ok) {
-          const errText = await apifyResponse.text();
-          throw new Error(`Apify error (${apifyResponse.status}): ${errText}`);
+        if (!rapidResponse.ok) {
+          const errText = await rapidResponse.text();
+          throw new Error(`RapidAPI error (${rapidResponse.status}): ${errText}`);
         }
 
-        const apifyData = await apifyResponse.json();
-        const videoData = apifyData?.[0];
+        const rapidData = await rapidResponse.json();
+        const videoInfo = rapidData?.data;
 
-        if (!videoData?.videoUrl) {
-          throw new Error("No se pudo obtener la URL del video de TikTok");
+        if (!videoInfo) {
+          throw new Error("No se pudo obtener datos del video de TikTok");
+        }
+
+        const downloadUrl = videoInfo.hdplay || videoInfo.play;
+        if (!downloadUrl) {
+          throw new Error("No se encontró URL de descarga en la respuesta de RapidAPI");
         }
 
         // Download the video binary
-        const videoResponse = await fetch(videoData.videoUrl);
+        const videoResponse = await fetch(downloadUrl);
         if (!videoResponse.ok) throw new Error("Error descargando video");
         const videoBlob = await videoResponse.blob();
 
@@ -139,12 +144,12 @@ Deno.serve(async (req) => {
           .update({
             metadata_json: {
               video_url: videoUrl,
-              duration: videoData.videoMeta?.duration || null,
-              resolution: videoData.videoMeta?.height
-                ? `${videoData.videoMeta.width}x${videoData.videoMeta.height}`
+              duration: videoInfo.duration || null,
+              resolution: videoInfo.height
+                ? `${videoInfo.width}x${videoInfo.height}`
                 : null,
-              original_description: videoData.text || null,
-              author: videoData.authorMeta?.name || null,
+              original_description: videoInfo.title || null,
+              author: videoInfo.author?.nickname || null,
             },
           })
           .eq("id", asset_id);
@@ -154,7 +159,7 @@ Deno.serve(async (req) => {
           .from("jobs")
           .update({
             status: "DONE" as const,
-            cost_json: { provider: "apify", estimated_cost: 0.05 },
+            cost_json: { provider: "rapidapi_tiktok", estimated_cost: 0.01 },
           })
           .eq("id", downloadJob!.id);
       } catch (err) {
