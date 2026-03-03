@@ -93,6 +93,7 @@ Deno.serve(async (req) => {
     }
 
     const klingTaskId = breakdown._tasks.kling_task_id;
+    const modelUsed = breakdown._tasks.model_used || "unknown";
     const userId = breakdown._user_id;
     const assetId = breakdown._asset_id;
     const ttsAudioUrl = breakdown._tts_audio_url;
@@ -153,7 +154,7 @@ Deno.serve(async (req) => {
       render_cost: totalCost,
       cost_breakdown_json: {
         tts: { provider: "elevenlabs", model: "eleven_multilingual_v2", estimated_usd: ttsCost },
-        kling_i2v: { provider: "kling", model: "v2.0/image2video", estimated_usd: klingCost },
+        i2v: { provider: "kie", model: modelUsed, estimated_usd: klingCost },
         total_usd: totalCost,
         _tts_audio_url: ttsAudioUrl,
       },

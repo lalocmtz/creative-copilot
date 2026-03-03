@@ -34,6 +34,79 @@ const VOICE_MAP: Record<string, string> = {
   v3: "pFZP5JQG7iQjIQuC4Bku",
 };
 
+// ========== Multi-Model Fallback Config ==========
+interface I2VModel {
+  id: string;
+  label: string;
+  buildInput: (kieImageUrl: string, prompt: string, negativePrompt: string) => Record<string, unknown>;
+}
+
+const I2V_MODELS: I2VModel[] = [
+  {
+    id: "kling/v2-1-master-image-to-video",
+    label: "Kling V2.1 Master",
+    buildInput: (kieImageUrl, prompt, negativePrompt) => ({
+      image_url: kieImageUrl,
+      prompt,
+      negative_prompt: negativePrompt,
+      duration: "10",
+      aspect_ratio: "9:16",
+      cfg_scale: 0.5,
+    }),
+  },
+  {
+    id: "kling-2.6/image-to-video",
+    label: "Kling 2.6",
+    buildInput: (kieImageUrl, prompt) => ({
+      image_urls: [kieImageUrl],
+      prompt,
+      sound: false,
+      duration: "10",
+    }),
+  },
+  {
+    id: "sora-2-image-to-video",
+    label: "Sora 2",
+    buildInput: (kieImageUrl, prompt) => ({
+      image_urls: [kieImageUrl],
+      prompt,
+      aspect_ratio: "9:16",
+      n_frames: 150,
+    }),
+  },
+];
+
+async function tryCreateI2VTask(
+  models: I2VModel[],
+  kieImageUrl: string,
+  prompt: string,
+  negativePrompt: string,
+  apiKey: string,
+): Promise<{ taskId: string; modelUsed: string }> {
+  for (const model of models) {
+    console.log(`[I2V FALLBACK] Trying model: ${model.label} (${model.id})`);
+    try {
+      const res = await fetch(`${KIE_BASE}/jobs/createTask`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: model.id,
+          input: model.buildInput(kieImageUrl, prompt, negativePrompt),
+        }),
+      });
+      const data = await res.json();
+      if (data.code === 200 && data.data?.taskId) {
+        console.log(`[I2V FALLBACK] ✅ ${model.label} succeeded: ${data.data.taskId}`);
+        return { taskId: data.data.taskId, modelUsed: model.label };
+      }
+      console.warn(`[I2V FALLBACK] ❌ ${model.label} failed: ${data.msg || JSON.stringify(data)}`);
+    } catch (err: any) {
+      console.warn(`[I2V FALLBACK] ❌ ${model.label} exception: ${err.message}`);
+    }
+  }
+  throw new Error("All I2V models failed. Tried: " + models.map(m => m.label).join(", "));
+}
+
 async function condensScript(scriptText: string, lovableApiKey: string): Promise<string> {
   console.log(`[CONDENSE] Original script (${scriptText.split(/\s+/).length} words): ${scriptText.substring(0, 100)}...`);
   
@@ -152,7 +225,7 @@ Deno.serve(async (req) => {
     }
     console.log(`[KICKOFF] Script: ${wordCount} words → condensed: ${condensedScript.split(/\s+/).length} words`);
 
-    // === STEP 1: TTS via ElevenLabs directly (synchronous) ===
+    // === STEP 1: TTS via ElevenLabs (speed 1.15x for UGC feel) ===
     const voiceId = VOICE_MAP[render.voice_id || "sarah"] || VOICE_MAP.sarah;
     console.log(`[KICKOFF] Starting ElevenLabs TTS for voice ${render.voice_id} → ${voiceId}`);
 
@@ -177,10 +250,11 @@ Deno.serve(async (req) => {
           text: condensedScript,
           model_id: "eleven_multilingual_v2",
           voice_settings: {
-            stability: 0.5,
+            stability: 0.4,
             similarity_boost: 0.75,
             style: 0.5,
             use_speaker_boost: true,
+            speed: 1.15,
           },
         }),
       }
@@ -197,12 +271,12 @@ Deno.serve(async (req) => {
     // Upload audio to Supabase Storage
     const audioPath = `${userId}/${assetId}/renders/${render_id}/tts_audio.mp3`;
     await supabaseAdmin.storage.from("ugc-assets").upload(audioPath, audioBuffer, { contentType: "audio/mpeg", upsert: true });
-    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 24 * 7); // 7 days
+    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 24 * 7);
     const ttsAudioUrl = audioSigned?.signedUrl;
     if (!ttsAudioUrl) throw new Error("Failed to get signed URL for TTS audio");
     console.log(`[KICKOFF] TTS audio uploaded to storage`);
 
-    // === STEP 2: Upload base image to KIE and start Kling I2V ===
+    // === STEP 2: Upload base image to KIE and start I2V with fallback ===
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         _tasks: { condensed_script: condensedScript },
@@ -225,45 +299,34 @@ Deno.serve(async (req) => {
     if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
-    // Build dynamic prompt from scenario + emotional intensity
+    // Build dynamic prompt
     const emotionalIntensity = render.emotional_intensity ?? 50;
     const scenarioExcerpt = render.scenario_prompt ? render.scenario_prompt.substring(0, 200) : "";
+    const scriptExcerpt = condensedScript.substring(0, 100);
     const movementLevel = emotionalIntensity > 70 ? "moderate expressive movement, animated gestures" : "subtle natural movement, gentle gestures";
-    const i2vPrompt = `${movementLevel}, person moving and gesturing as if speaking to camera. UGC style, handheld camera feel, 9:16 vertical format. ${scenarioExcerpt}`.trim();
+    
+    const i2vPrompt = `Create a 10-second vertical (9:16) UGC-style TikTok video. ${movementLevel}, person talking directly to camera with authentic energy. Handheld camera feel, natural lighting, fast pacing. Context: "${scriptExcerpt}". ${scenarioExcerpt}. Style: realistic UGC, not cinematic. No watermarks, no logos, no famous faces.`.trim();
+    
+    const negativePrompt = "logos, text overlay, watermark, famous faces, distorted faces, extra limbs, cinematic look, slow motion, studio lighting";
 
-    console.log(`[KICKOFF] Kling I2V prompt: ${i2vPrompt.substring(0, 120)}...`);
+    console.log(`[KICKOFF] I2V prompt: ${i2vPrompt.substring(0, 150)}...`);
 
-    // Start Kling Image-to-Video
-    const klingRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "kling-2.6/image-to-video",
-        input: {
-          image_urls: [kieImageUrl],
-          prompt: i2vPrompt,
-          sound: false,
-          duration: "10",
-        },
-      }),
-    });
-    const klingData = await klingRes.json();
-    if (klingData.code !== 200) throw new Error(`Kling I2V task failed: ${klingData.msg || JSON.stringify(klingData)}`);
-    const klingTaskId = klingData.data.taskId;
-    console.log(`[KICKOFF] Kling I2V task started: ${klingTaskId}`);
+    // === Multi-model fallback ===
+    const { taskId, modelUsed } = await tryCreateI2VTask(I2V_MODELS, kieImageUrl, i2vPrompt, negativePrompt, KIE_API_KEY);
+    console.log(`[KICKOFF] I2V task started with ${modelUsed}: ${taskId}`);
 
-    // Save Kling task ID for polling
+    // Save task ID + model for polling
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
-        _tasks: { kling_task_id: klingTaskId, condensed_script: condensedScript },
-        _progress: { step: "animating_image", detail: "Animando imagen (~30-60s)…", updated_at: new Date().toISOString() },
+        _tasks: { kling_task_id: taskId, model_used: modelUsed, condensed_script: condensedScript },
+        _progress: { step: "animating_image", detail: `Animando imagen con ${modelUsed} (~30-60s)…`, updated_at: new Date().toISOString() },
         _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
         _tts_audio_url: ttsAudioUrl,
         _started_at: new Date().toISOString(),
       },
     }).eq("id", render_id);
 
-    return json({ started: true, kling_task_id: klingTaskId, condensed_script: condensedScript });
+    return json({ started: true, task_id: taskId, model_used: modelUsed, condensed_script: condensedScript });
   } catch (err: any) {
     console.error("[ERROR]", err.message);
     try {
