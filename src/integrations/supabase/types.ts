@@ -85,6 +85,41 @@ export type Database = {
           },
         ]
       }
+      credit_transactions: {
+        Row: {
+          created_at: string
+          credits_delta: number
+          id: string
+          related_render_id: string | null
+          type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credits_delta: number
+          id?: string
+          related_render_id?: string | null
+          type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credits_delta?: number
+          id?: string
+          related_render_id?: string | null
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "credit_transactions_related_render_id_fkey"
+            columns: ["related_render_id"]
+            isOneToOne: false
+            referencedRelation: "renders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       jobs: {
         Row: {
           asset_id: string
@@ -203,6 +238,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      user_credits: {
+        Row: {
+          created_at: string
+          id: string
+          total_credits: number
+          updated_at: string
+          used_credits: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          total_credits?: number
+          updated_at?: string
+          used_credits?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          total_credits?: number
+          updated_at?: string
+          used_credits?: number
+          user_id?: string
+        }
+        Relationships: []
       }
     }
     Views: {

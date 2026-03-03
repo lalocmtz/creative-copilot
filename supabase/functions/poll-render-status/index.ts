@@ -147,6 +147,32 @@ Deno.serve(async (req) => {
 
     await supabaseAdmin.from("assets").update({ status: "VIDEO_RENDERED" }).eq("id", assetId);
 
+    // ========== Credit deduction ==========
+    if (userId) {
+      console.log("[POLL] Deducting 1 credit for user:", userId);
+      // Fetch current credits
+      const { data: creditData } = await supabaseAdmin
+        .from("user_credits")
+        .select("used_credits")
+        .eq("user_id", userId)
+        .single();
+      
+      if (creditData) {
+        await supabaseAdmin
+          .from("user_credits")
+          .update({ used_credits: creditData.used_credits + 1 })
+          .eq("user_id", userId);
+        
+        await supabaseAdmin.from("credit_transactions").insert({
+          user_id: userId,
+          type: "USAGE",
+          credits_delta: -1,
+          related_render_id: render_id,
+        });
+        console.log("[POLL] Credit deducted successfully");
+      }
+    }
+
     if (breakdown._job_id) {
       await supabaseAdmin.from("jobs").update({
         status: "DONE",
