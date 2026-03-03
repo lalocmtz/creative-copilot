@@ -435,8 +435,11 @@ After completing all above:
 - Word counter + duration estimator
 - Nivel 1 gating by `rights_confirmed`
 
-### Phase 5 — Base Image Generation
-- Edge function for Grok Imagine
+### Phase 5 — Base Image Generation ✅
+- ~~Edge function for Grok Imagine~~ → Replaced with Lovable AI (gemini-3-pro-image-preview)
+- ✅ Visual-faithful generation: Gemini analyzes original video frame during blueprint to produce scene-accurate `escenario_sugerido`
+- ✅ Reference-based image generation: original video sent as reference to replicate exact composition/distance/lighting with different person
+- ✅ KIE AI removed, replaced with Lovable AI image generation
 - Image approval flow
 - Cost tracking per image
 
