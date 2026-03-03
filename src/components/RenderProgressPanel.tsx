@@ -8,15 +8,15 @@ interface ProgressInfo {
 }
 
 const STEPS = [
-  { key: "uploading_reference", label: "Subiendo video de referencia", pct: 10 },
-  { key: "motion_starting", label: "Iniciando transferencia de movimiento", pct: 20 },
-  { key: "motion_transferring", label: "Transfiriendo movimiento (~3-5 min)", pct: 55 },
+  { key: "generating_tts", label: "Generando voz (TTS)…", pct: 10 },
+  { key: "video_starting", label: "Iniciando generación de video", pct: 20 },
+  { key: "generating_video", label: "Generando video 10s (~3-5 min)", pct: 55 },
   { key: "downloading", label: "Descargando resultado", pct: 80 },
   { key: "uploading", label: "Subiendo video final", pct: 95 },
 ];
 
 const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
-  const currentStep = progress?.step || "uploading_reference";
+  const currentStep = progress?.step || "generating_tts";
   const currentIdx = STEPS.findIndex((s) => s.key === currentStep);
   const pct = currentIdx >= 0 ? STEPS[currentIdx].pct : 5;
 
@@ -25,7 +25,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
       <div className="flex items-center gap-2">
         <Loader2 className="w-4 h-4 animate-spin text-primary" />
         <span className="text-xs font-medium text-foreground">
-          {progress?.detail || "Preparando transferencia de movimiento…"}
+          {progress?.detail || "Preparando TTS y video…"}
         </span>
       </div>
       <Progress value={pct} className="h-2" />
@@ -57,7 +57,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
         })}
       </div>
       <p className="text-[10px] text-muted-foreground text-center">
-        Transferencia estructural de movimiento — misma duración y gestos del original
+        Generando voz del guion + video 10s desde imagen base
       </p>
     </div>
   );

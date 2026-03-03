@@ -70,13 +70,58 @@ Deno.serve(async (req) => {
 
     const breakdown = render.cost_breakdown_json as any;
     if (!breakdown?._tasks) {
-      // No task data — render is stuck from a previous failed attempt
       return json({ error: "No task data found. Use retry to reset this render.", status: "STUCK" }, 400);
     }
 
+    const ttsTaskId = breakdown._tasks.tts_task_id;
     const videoTaskId = breakdown._tasks.video_task_id || breakdown._tasks.motion_task_id;
     if (!videoTaskId) return json({ error: "No video task ID found" }, 400);
 
+    const userId = breakdown._user_id;
+    const assetId = breakdown._asset_id;
+
+    // === Check TTS task first ===
+    let ttsComplete = !ttsTaskId; // If no TTS task, consider it done
+    let ttsResultUrl: string | null = breakdown._tts_result_url || null;
+
+    if (ttsTaskId && !ttsResultUrl) {
+      console.log(`[POLL] Checking TTS task: ${ttsTaskId}`);
+      const ttsStatus = await checkTask(ttsTaskId, KIE_API_KEY);
+
+      if (ttsStatus.state === "fail") {
+        await supabaseAdmin.from("renders").update({
+          status: "FAILED",
+          cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `TTS failed: ${ttsStatus.failMsg}` } },
+        }).eq("id", render_id);
+        return json({ status: "FAILED", step: "failed", detail: `TTS: ${ttsStatus.failMsg}` });
+      }
+
+      if (ttsStatus.state === "success") {
+        ttsResultUrl = ttsStatus.resultJson?.resultUrls?.[0] || ttsStatus.resultJson?.url || null;
+        ttsComplete = true;
+        // Cache TTS result URL in breakdown
+        await supabaseAdmin.from("renders").update({
+          cost_breakdown_json: {
+            ...breakdown,
+            _tts_result_url: ttsResultUrl,
+            _progress: { step: "generating_video", detail: "Voz lista. Generando video (~3-5 min)…", updated_at: new Date().toISOString() },
+          },
+        }).eq("id", render_id);
+        console.log("[POLL] TTS complete:", ttsResultUrl);
+      } else {
+        await supabaseAdmin.from("renders").update({
+          cost_breakdown_json: {
+            ...breakdown,
+            _progress: { step: "generating_tts", detail: "Generando voz…", updated_at: new Date().toISOString() },
+          },
+        }).eq("id", render_id);
+        return json({ status: "RENDERING", step: "generating_tts" });
+      }
+    } else if (ttsTaskId && ttsResultUrl) {
+      ttsComplete = true;
+    }
+
+    // === Check video task ===
     console.log(`[POLL] Checking video task: ${videoTaskId}`);
     const taskStatus = await checkTask(videoTaskId, KIE_API_KEY);
 
@@ -89,16 +134,19 @@ Deno.serve(async (req) => {
     }
 
     if (taskStatus.state !== "success") {
+      // Re-read breakdown in case TTS updated it
+      const { data: freshRender } = await supabaseAdmin.from("renders").select("cost_breakdown_json").eq("id", render_id).single();
+      const freshBreakdown = freshRender?.cost_breakdown_json as any || breakdown;
       await supabaseAdmin.from("renders").update({
         cost_breakdown_json: {
-          ...breakdown,
-          _progress: { step: "generating_video", detail: "Generando video (~2-4 min)…", updated_at: new Date().toISOString() },
+          ...freshBreakdown,
+          _progress: { step: "generating_video", detail: "Generando video 10s (~3-5 min)…", updated_at: new Date().toISOString() },
         },
       }).eq("id", render_id);
       return json({ status: "RENDERING", step: "generating_video" });
     }
 
-    // Video done! Download and finalize
+    // === Both done! Download and finalize ===
     console.log("[POLL] Video generation complete! Finalizing...");
     const videoFileUrl = taskStatus.resultJson?.resultUrls?.[0];
     if (!videoFileUrl) throw new Error("Video generation returned no URL");
@@ -106,16 +154,30 @@ Deno.serve(async (req) => {
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         ...breakdown,
-        _progress: { step: "downloading", detail: "Descargando resultado…", updated_at: new Date().toISOString() },
+        _progress: { step: "downloading", detail: "Descargando video y audio…", updated_at: new Date().toISOString() },
       },
     }).eq("id", render_id);
 
-    const userId = breakdown._user_id;
-    const assetId = breakdown._asset_id;
-
+    // Download video
     const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
     const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
     const videoPath = `${userId}/${assetId}/renders/${render_id}/video.mp4`;
+
+    // Download TTS audio (if available)
+    let ttsAudioSignedUrl: string | null = null;
+    if (ttsResultUrl) {
+      try {
+        const ttsDownloadUrl = await getDownloadUrl(ttsResultUrl, KIE_API_KEY);
+        const ttsBuffer = await (await fetch(ttsDownloadUrl)).arrayBuffer();
+        const ttsPath = `${userId}/${assetId}/renders/${render_id}/tts_audio.mp3`;
+        await supabaseAdmin.storage.from("ugc-assets").upload(ttsPath, ttsBuffer, { contentType: "audio/mpeg", upsert: true });
+        const { data: ttsSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(ttsPath, 60 * 60 * 24 * 7);
+        ttsAudioSignedUrl = ttsSigned?.signedUrl || null;
+        console.log("[POLL] TTS audio uploaded to storage");
+      } catch (ttsErr: any) {
+        console.error("[POLL] TTS download/upload failed (non-fatal):", ttsErr.message);
+      }
+    }
 
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
@@ -127,19 +189,18 @@ Deno.serve(async (req) => {
     await supabaseAdmin.storage.from("ugc-assets").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
     const { data: videoSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(videoPath, 60 * 60 * 24 * 7);
 
-    // Get source audio signed URL
-    const sourceVideoPath = `${userId}/${assetId}/source.mp4`;
-    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(sourceVideoPath, 60 * 60 * 24 * 7);
-
-    const totalCost = 0.10; // ~$0.10 for 5s image-to-video at 720p
+    const ttsCost = ttsTaskId ? 0.02 : 0;
+    const videoCost = 0.10;
+    const totalCost = ttsCost + videoCost;
 
     await supabaseAdmin.from("renders").update({
       status: "DONE",
       final_video_url: videoSigned?.signedUrl || videoFileUrl,
       render_cost: totalCost,
       cost_breakdown_json: {
-        image_to_video: { provider: "kling", model: "2.6-image-to-video", duration: "5s", estimated_usd: totalCost },
-        audio_url: audioSigned?.signedUrl,
+        tts: ttsTaskId ? { provider: "elevenlabs", model: "turbo-2.5", estimated_usd: ttsCost } : undefined,
+        image_to_video: { provider: "kling", model: "2.6-image-to-video", duration: "10s", estimated_usd: videoCost },
+        tts_audio_url: ttsAudioSignedUrl,
         total_usd: totalCost,
       },
     }).eq("id", render_id);
@@ -149,13 +210,13 @@ Deno.serve(async (req) => {
     if (breakdown._job_id) {
       await supabaseAdmin.from("jobs").update({
         status: "DONE",
-        cost_json: { image_to_video: totalCost, total: totalCost },
-        provider_job_id: `i2v:${videoTaskId}`,
+        cost_json: { tts: ttsCost, image_to_video: videoCost, total: totalCost },
+        provider_job_id: `tts:${ttsTaskId}|i2v:${videoTaskId}`,
       }).eq("id", breakdown._job_id);
     }
 
-    console.log("[POLL] Image-to-video pipeline complete!");
-    return json({ status: "DONE", video_url: videoSigned?.signedUrl, audio_url: audioSigned?.signedUrl, cost: totalCost });
+    console.log("[POLL] Pipeline complete! TTS + 10s video.");
+    return json({ status: "DONE", video_url: videoSigned?.signedUrl, tts_audio_url: ttsAudioSignedUrl, cost: totalCost });
   } catch (err: any) {
     console.error("[POLL ERROR]", err.message);
     return json({ error: err.message }, 500);
