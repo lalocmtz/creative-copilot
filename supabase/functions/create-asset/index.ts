@@ -13,6 +13,17 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function normalizeTikTokUrl(input: string): string {
+  try {
+    const u = new URL(input.trim());
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return input.trim().split("?")[0].replace(/\/$/, "");
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -33,13 +44,16 @@ Deno.serve(async (req) => {
     const { source_url, rights_confirmed } = await req.json();
     if (!source_url?.trim()) return json({ error: "source_url es requerido" }, 400);
 
+    const cleanedSourceUrl = normalizeTikTokUrl(source_url);
+    console.log("create-asset source_url:", source_url, "-> cleaned:", cleanedSourceUrl);
+
     // Service role client for DB operations
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Compute simple hash for dedupe
+    // Compute simple hash for dedupe (using cleaned URL)
     const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest("SHA-256", encoder.encode(source_url.trim().toLowerCase()));
+    const hashBuffer = await crypto.subtle.digest("SHA-256", encoder.encode(cleanedSourceUrl.toLowerCase()));
     const sourceHash = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
@@ -61,7 +75,7 @@ Deno.serve(async (req) => {
       .from("assets")
       .insert({
         user_id: user.id,
-        source_url: source_url.trim(),
+        source_url: cleanedSourceUrl,
         source_hash: sourceHash,
         rights_confirmed: rights_confirmed ?? false,
         status: "PENDING",

@@ -13,6 +13,17 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function normalizeTikTokUrl(input: string): string {
+  try {
+    const u = new URL(input.trim());
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return input.trim().split("?")[0].replace(/\/$/, "");
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -87,7 +98,10 @@ Deno.serve(async (req) => {
         }
 
         // Call RapidAPI TikTok download
-        const encodedUrl = encodeURIComponent(asset.source_url);
+        const cleanedUrl = normalizeTikTokUrl(asset.source_url);
+        console.log("TikTok source_url:", asset.source_url);
+        console.log("TikTok cleaned_url:", cleanedUrl);
+        const encodedUrl = encodeURIComponent(cleanedUrl);
         const rapidResponse = await fetch(
           `https://tiktok-download-video1.p.rapidapi.com/getVideo?url=${encodedUrl}&hd=1`,
           {
