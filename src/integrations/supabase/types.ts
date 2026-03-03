@@ -14,7 +14,196 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      assets: {
+        Row: {
+          created_at: string
+          id: string
+          metadata_json: Json | null
+          rights_confirmed: boolean
+          source_hash: string | null
+          source_url: string
+          status: Database["public"]["Enums"]["asset_status"]
+          transcript: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metadata_json?: Json | null
+          rights_confirmed?: boolean
+          source_hash?: string | null
+          source_url: string
+          status?: Database["public"]["Enums"]["asset_status"]
+          transcript?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metadata_json?: Json | null
+          rights_confirmed?: boolean
+          source_hash?: string | null
+          source_url?: string
+          status?: Database["public"]["Enums"]["asset_status"]
+          transcript?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      blueprints: {
+        Row: {
+          analysis_json: Json
+          asset_id: string
+          created_at: string
+          id: string
+          token_cost: number | null
+          variations_json: Json
+        }
+        Insert: {
+          analysis_json?: Json
+          asset_id: string
+          created_at?: string
+          id?: string
+          token_cost?: number | null
+          variations_json?: Json
+        }
+        Update: {
+          analysis_json?: Json
+          asset_id?: string
+          created_at?: string
+          id?: string
+          token_cost?: number | null
+          variations_json?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blueprints_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: true
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      jobs: {
+        Row: {
+          asset_id: string
+          attempts: number
+          cost_json: Json | null
+          created_at: string
+          error_message: string | null
+          id: string
+          idempotency_key: string
+          provider_job_id: string | null
+          render_id: string | null
+          status: Database["public"]["Enums"]["job_status"]
+          type: Database["public"]["Enums"]["job_type"]
+          updated_at: string
+        }
+        Insert: {
+          asset_id: string
+          attempts?: number
+          cost_json?: Json | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          idempotency_key: string
+          provider_job_id?: string | null
+          render_id?: string | null
+          status?: Database["public"]["Enums"]["job_status"]
+          type: Database["public"]["Enums"]["job_type"]
+          updated_at?: string
+        }
+        Update: {
+          asset_id?: string
+          attempts?: number
+          cost_json?: Json | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          idempotency_key?: string
+          provider_job_id?: string | null
+          render_id?: string | null
+          status?: Database["public"]["Enums"]["job_status"]
+          type?: Database["public"]["Enums"]["job_type"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jobs_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "jobs_render_id_fkey"
+            columns: ["render_id"]
+            isOneToOne: false
+            referencedRelation: "renders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      renders: {
+        Row: {
+          actor_id: string | null
+          asset_id: string
+          base_image_url: string | null
+          cost_breakdown_json: Json | null
+          created_at: string
+          emotional_intensity: number | null
+          final_video_url: string | null
+          id: string
+          product_image_url: string | null
+          render_cost: number | null
+          scenario_prompt: string | null
+          status: Database["public"]["Enums"]["render_status"]
+          variation_level: number
+          voice_id: string | null
+        }
+        Insert: {
+          actor_id?: string | null
+          asset_id: string
+          base_image_url?: string | null
+          cost_breakdown_json?: Json | null
+          created_at?: string
+          emotional_intensity?: number | null
+          final_video_url?: string | null
+          id?: string
+          product_image_url?: string | null
+          render_cost?: number | null
+          scenario_prompt?: string | null
+          status?: Database["public"]["Enums"]["render_status"]
+          variation_level?: number
+          voice_id?: string | null
+        }
+        Update: {
+          actor_id?: string | null
+          asset_id?: string
+          base_image_url?: string | null
+          cost_breakdown_json?: Json | null
+          created_at?: string
+          emotional_intensity?: number | null
+          final_video_url?: string | null
+          id?: string
+          product_image_url?: string | null
+          render_cost?: number | null
+          scenario_prompt?: string | null
+          status?: Database["public"]["Enums"]["render_status"]
+          variation_level?: number
+          voice_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "renders_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +212,30 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      asset_status:
+        | "PENDING"
+        | "VIDEO_INGESTED"
+        | "BLUEPRINT_GENERATED"
+        | "IMAGE_APPROVED"
+        | "VIDEO_RENDERED"
+        | "FAILED"
+      job_status: "PENDING" | "RUNNING" | "DONE" | "FAILED"
+      job_type:
+        | "download_video"
+        | "transcribe"
+        | "blueprint"
+        | "base_image"
+        | "tts"
+        | "video"
+        | "lipsync"
+        | "merge"
+      render_status:
+        | "DRAFT"
+        | "IMAGE_GENERATED"
+        | "IMAGE_APPROVED"
+        | "RENDERING"
+        | "DONE"
+        | "FAILED"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +362,34 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      asset_status: [
+        "PENDING",
+        "VIDEO_INGESTED",
+        "BLUEPRINT_GENERATED",
+        "IMAGE_APPROVED",
+        "VIDEO_RENDERED",
+        "FAILED",
+      ],
+      job_status: ["PENDING", "RUNNING", "DONE", "FAILED"],
+      job_type: [
+        "download_video",
+        "transcribe",
+        "blueprint",
+        "base_image",
+        "tts",
+        "video",
+        "lipsync",
+        "merge",
+      ],
+      render_status: [
+        "DRAFT",
+        "IMAGE_GENERATED",
+        "IMAGE_APPROVED",
+        "RENDERING",
+        "DONE",
+        "FAILED",
+      ],
+    },
   },
 } as const
