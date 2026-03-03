@@ -8,15 +8,16 @@ interface ProgressInfo {
 }
 
 const STEPS = [
-  { key: "generating_tts", label: "Generando voz (TTS)…", pct: 10 },
-  { key: "video_starting", label: "Iniciando generación de video", pct: 20 },
-  { key: "generating_video", label: "Generando video 10s (~3-5 min)", pct: 55 },
-  { key: "downloading", label: "Descargando resultado", pct: 80 },
+  { key: "condensing_script", label: "Condensando guion a 10s…", pct: 5 },
+  { key: "generating_tts", label: "Generando voz (TTS)…", pct: 15 },
+  { key: "starting_lipsync", label: "Iniciando lip-sync…", pct: 25 },
+  { key: "generating_lipsync", label: "Sincronizando labios + audio (~2-4 min)…", pct: 55 },
+  { key: "downloading", label: "Descargando video final", pct: 85 },
   { key: "uploading", label: "Subiendo video final", pct: 95 },
 ];
 
 const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
-  const currentStep = progress?.step || "generating_tts";
+  const currentStep = progress?.step || "condensing_script";
   const currentIdx = STEPS.findIndex((s) => s.key === currentStep);
   const pct = currentIdx >= 0 ? STEPS[currentIdx].pct : 5;
 
@@ -25,7 +26,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
       <div className="flex items-center gap-2">
         <Loader2 className="w-4 h-4 animate-spin text-primary" />
         <span className="text-xs font-medium text-foreground">
-          {progress?.detail || "Preparando TTS y video…"}
+          {progress?.detail || "Preparando pipeline…"}
         </span>
       </div>
       <Progress value={pct} className="h-2" />
@@ -57,7 +58,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
         })}
       </div>
       <p className="text-[10px] text-muted-foreground text-center">
-        Generando voz del guion + video 10s desde imagen base
+        Video con audio integrado y labios sincronizados
       </p>
     </div>
   );
