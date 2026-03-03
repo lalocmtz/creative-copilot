@@ -77,7 +77,7 @@ Deno.serve(async (req) => {
     const uploadVideoRes = await fetch(KIE_FILE_UPLOAD, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ url: sourceVideoUrl }),
+      body: JSON.stringify({ fileUrl: sourceVideoUrl }),
     });
     const uploadVideoData = await uploadVideoRes.json();
     if (!uploadVideoData?.data?.url) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
     const uploadImageRes = await fetch(KIE_FILE_UPLOAD, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ url: baseImageUrl }),
+      body: JSON.stringify({ fileUrl: baseImageUrl }),
     });
     const uploadImageData = await uploadImageRes.json();
     if (!uploadImageData?.data?.url) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
