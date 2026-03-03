@@ -132,11 +132,15 @@ Deno.serve(async (req) => {
 
         if (uploadError) throw new Error(`Storage upload error: ${uploadError.message}`);
 
-        const { data: publicUrl } = supabase.storage
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from("ugc-assets")
-          .getPublicUrl(storagePath);
+          .createSignedUrl(storagePath, 3600); // 1 hour expiry
 
-        videoUrl = publicUrl.publicUrl;
+        if (signedUrlError || !signedUrlData?.signedUrl) {
+          throw new Error(`Error generating signed URL: ${signedUrlError?.message}`);
+        }
+
+        videoUrl = signedUrlData.signedUrl;
 
         // Update asset metadata
         await supabase
