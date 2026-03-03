@@ -151,7 +151,7 @@ export const useGenerateFinalVideo = () => {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (renderId: string) => {
+    mutationFn: async ({ renderId, script }: { renderId: string; script?: string }) => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
@@ -164,7 +164,7 @@ export const useGenerateFinalVideo = () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ render_id: renderId }),
+          body: JSON.stringify({ render_id: renderId, script }),
         }
       );
       const result = await res.json();

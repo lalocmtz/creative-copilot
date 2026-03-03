@@ -539,15 +539,15 @@ const Studio = () => {
                         className="w-full h-full object-contain"
                       />
                     </div>
-                    {(render.cost_breakdown_json as any)?.audio_url && (
+                    {(render.cost_breakdown_json as any)?.tts_audio_url && (
                       <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground font-medium">Audio Original</p>
+                        <p className="text-xs text-muted-foreground font-medium">Audio Generado (TTS)</p>
                         <audio
-                          src={(render.cost_breakdown_json as any).audio_url}
+                          src={(render.cost_breakdown_json as any).tts_audio_url}
                           controls
                           className="w-full h-8"
                         />
-                        <p className="text-[10px] text-muted-foreground">Audio del video original (reproducir junto al video)</p>
+                        <p className="text-[10px] text-muted-foreground">Voz generada del guion (reproducir junto al video)</p>
                       </div>
                     )}
                     <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.10"}`} label="costo video (image-to-video)" size="sm" />
@@ -568,9 +568,9 @@ const Studio = () => {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <CostDisplay amount="~$0.10" label="video 5s (image-to-video, 720p)" size="md" />
+                    <CostDisplay amount="~$0.12" label="video 10s + voz generada (TTS)" size="md" />
                     <p className="text-[10px] text-muted-foreground text-center">
-                      Anima la imagen base con movimiento natural (5 segundos)
+                      Genera voz del guion + anima imagen base (10 segundos)
                     </p>
                     {isRendering && (
                       <RenderProgressPanel progress={(render?.cost_breakdown_json as any)?._progress} />
@@ -588,7 +588,7 @@ const Studio = () => {
                       </Button>
                     )}
                     <Button
-                      onClick={() => render && generateFinalVideo.mutate(render.id)}
+                      onClick={() => render && generateFinalVideo.mutate({ renderId: render.id, script })}
                       disabled={isRendering || !render || render.status === "FAILED"}
                       className="w-full gap-2"
                     >
