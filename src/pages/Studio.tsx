@@ -539,18 +539,7 @@ const Studio = () => {
                         className="w-full h-full object-contain"
                       />
                     </div>
-                    {(render.cost_breakdown_json as any)?.tts_audio_url && (
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground font-medium">Audio Generado (TTS)</p>
-                        <audio
-                          src={(render.cost_breakdown_json as any).tts_audio_url}
-                          controls
-                          className="w-full h-8"
-                        />
-                        <p className="text-[10px] text-muted-foreground">Voz generada del guion (reproducir junto al video)</p>
-                      </div>
-                    )}
-                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.10"}`} label="costo video (image-to-video)" size="sm" />
+                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.15"}`} label="costo video (lip-sync + TTS)" size="sm" />
                     <div className="flex gap-2">
                       <a
                         href={render.final_video_url}
@@ -564,13 +553,13 @@ const Studio = () => {
                         </Button>
                       </a>
                     </div>
-                    <p className="text-xs text-success text-center font-medium">✓ Video generado exitosamente</p>
+                    <p className="text-xs text-success text-center font-medium">✓ Video con audio integrado</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <CostDisplay amount="~$0.12" label="video 10s + voz generada (TTS)" size="md" />
+                    <CostDisplay amount="~$0.15" label="video con voz sincronizada (lip-sync)" size="md" />
                     <p className="text-[10px] text-muted-foreground text-center">
-                      Genera voz del guion + anima imagen base (10 segundos)
+                      Condensa guion + genera voz + sincroniza labios con audio integrado
                     </p>
                     {isRendering && (
                       <RenderProgressPanel progress={(render?.cost_breakdown_json as any)?._progress} />
