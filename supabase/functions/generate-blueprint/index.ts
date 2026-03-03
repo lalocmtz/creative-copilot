@@ -71,7 +71,6 @@ serve(async (req) => {
       return json({ error: "Blueprint already exists. Use force=true to regenerate." }, 409);
     }
 
-    // Delete old blueprint if forcing
     if (existingBp && force) {
       await supabaseAdmin.from("blueprints").delete().eq("id", existingBp.id);
     }
@@ -90,41 +89,101 @@ serve(async (req) => {
       .select()
       .single();
 
-    // Call Lovable AI (Gemini) via tool calling for structured output
+    // Generate signed URL for the stored video so Gemini can see it
+    let videoSignedUrl: string | null = null;
+    const videoUrl = asset.metadata_json?.video_url;
+    if (videoUrl && typeof videoUrl === "string") {
+      // Extract storage path from the signed URL or metadata
+      // The video is stored at {userId}/{assetId}/video.mp4
+      const storagePath = `${asset.user_id}/${asset_id}/video.mp4`;
+      const { data: signedData } = await supabaseAdmin.storage
+        .from("ugc-assets")
+        .createSignedUrl(storagePath, 60 * 30); // 30 min expiry
+      if (signedData?.signedUrl) {
+        videoSignedUrl = signedData.signedUrl;
+        console.log("Video signed URL generated for visual analysis");
+      } else {
+        console.log("Could not generate signed URL for video, falling back to text-only analysis");
+      }
+    }
+
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       return json({ error: "LOVABLE_API_KEY not configured" }, 500);
     }
 
-    const systemPrompt = `Eres un estratega de contenido UGC experto en TikTok Shop. Analizas transcripts de videos virales y extraes su estructura estratégica para poder recrearlos con nuevos actores y escenarios SIN copiar identidades.
+    const systemPrompt = videoSignedUrl
+      ? `Eres un estratega de contenido UGC experto en TikTok Shop. Estás viendo el VIDEO REAL que se debe replicar. Tu trabajo es analizar tanto el transcript como la COMPOSICIÓN VISUAL EXACTA del video.
+
+ANÁLISIS VISUAL CRÍTICO - Debes describir con precisión quirúrgica:
+1. DISTANCIA DE CÁMARA: ¿selfie pegado a la cara? ¿a distancia de brazo? ¿espejo? ¿trípode lejano?
+2. ÁNGULO: ¿desde arriba? ¿recto? ¿desde abajo? ¿inclinado?
+3. FONDO EXACTO: ¿qué se ve detrás? Tiles de baño, pared blanca, cocina, habitación, exterior...
+4. ILUMINACIÓN: ¿luz cálida de baño? ¿luz natural de ventana? ¿ring light? ¿fluorescente?
+5. POSICIÓN DE LA PERSONA: ¿centrada? ¿ligeramente a la derecha/izquierda? ¿cortada por la cintura?
+6. VESTIMENTA Y ESTILO: lo que lleva puesto exactamente
+7. EXPRESIÓN Y POSE: ¿hablando a cámara? ¿mostrando producto? ¿gesticulando?
+8. CALIDAD/ESTILO DE IMAGEN: ¿granulado? ¿nítido? ¿filtro warm? ¿sin filtro?
+
+Para el campo "escenario_sugerido", crea un prompt de generación de imagen que REPLIQUE EXACTAMENTE la composición visual del video pero con UNA PERSONA DIFERENTE. No inventes un escenario genérico - describe lo que VES.
+
+Tu trabajo completo:
+1. Analizar el transcript y extraer hook, ángulo psicológico, emoción dominante, mecanismo de venta
+2. Detectar el género del hablante
+3. Crear el escenario_sugerido basado en lo que VES en el video (NO inventar)
+4. Dividir el video en beats con timestamps estimados
+5. Identificar riesgos de política
+6. Crear 3 variaciones del guion:
+   - Nivel 1: Clon EXACTO del transcript original
+   - Nivel 2: Variación moderada
+   - Nivel 3: Nuevo enfoque`
+      : `Eres un estratega de contenido UGC experto en TikTok Shop. Analizas transcripts de videos virales y extraes su estructura estratégica para poder recrearlos con nuevos actores y escenarios SIN copiar identidades.
 
 Tu trabajo es:
 1. Analizar el transcript y extraer hook, ángulo psicológico, emoción dominante, mecanismo de venta
-2. Detectar el género del hablante (femenino/masculino) basándote en pistas del lenguaje
+2. Detectar el género del hablante basándote en pistas del lenguaje
 3. Crear una descripción MUY DETALLADA de un escenario similar pero diferente para generar una imagen base
 4. Dividir el video en beats con timestamps estimados
-5. Identificar riesgos de política (marcas, claims médicos, etc.)
+5. Identificar riesgos de política
 6. Crear 3 variaciones del guion:
-   - Nivel 1: Clon EXACTO del transcript original (palabra por palabra)
-   - Nivel 2: Variación moderada (misma estructura, diferentes palabras)
-   - Nivel 3: Nuevo enfoque (mismo producto/tema, ángulo completamente diferente)
+   - Nivel 1: Clon EXACTO del transcript original
+   - Nivel 2: Variación moderada
+   - Nivel 3: Nuevo enfoque
 
-IMPORTANTE: El escenario sugerido debe ser un prompt extenso y detallado para generación de imagen, describiendo:
-- Tipo de persona (género, rango de edad, etnicidad ambigua)
-- Vestimenta y estilo
-- Escenario/fondo detallado
-- Iluminación y atmósfera
-- Expresión facial y pose
-- Formato: retrato 9:16, estilo UGC natural, cámara frontal de celular`;
+IMPORTANTE: El escenario sugerido debe ser un prompt extenso y detallado para generación de imagen, describiendo tipo de persona, vestimenta, escenario/fondo, iluminación, expresión facial, pose. Formato: retrato 9:16, estilo UGC natural, cámara frontal de celular`;
 
-    const userPrompt = `Analiza este transcript de un video viral de TikTok y devuélveme el análisis estratégico completo.
+    // Build user content - include video frame if available
+    const userContent: any[] = [];
+
+    if (videoSignedUrl) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: videoSignedUrl },
+      });
+      userContent.push({
+        type: "text",
+        text: `Estás viendo el video original. Analiza TANTO la composición visual como el transcript.
 
 TRANSCRIPT:
 """
 ${asset.transcript}
 """
 
-Responde usando la función analyze_transcript.`;
+Responde usando la función analyze_transcript. El escenario_sugerido DEBE describir exactamente lo que ves en el video (distancia, ángulo, fondo, iluminación) pero indicando una PERSONA DIFERENTE.`,
+      });
+    } else {
+      userContent.push({
+        type: "text",
+        text: `Analiza este transcript de un video viral de TikTok y devuélveme el análisis estratégico completo.
+
+TRANSCRIPT:
+"""
+${asset.transcript}
+"""
+
+Responde usando la función analyze_transcript.`,
+      });
+    }
 
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -133,10 +192,10 @@ Responde usando la función analyze_transcript.`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "user", content: userContent },
         ],
         tools: [
           {
@@ -156,7 +215,7 @@ Responde usando la función analyze_transcript.`;
                       emocion_dominante: { type: "string", description: "Dominant emotion" },
                       mecanismo: { type: "string", description: "Sales mechanism" },
                       genero_detectado: { type: "string", enum: ["femenino", "masculino"], description: "Detected speaker gender" },
-                      escenario_sugerido: { type: "string", description: "Very detailed image generation prompt for a similar but different scenario (at least 100 words)" },
+                      escenario_sugerido: { type: "string", description: "Ultra-detailed image generation prompt replicating the EXACT visual composition of the original video (camera distance, angle, background, lighting, pose) but with a DIFFERENT person. At least 150 words." },
                       intensidad_emocional: { type: "number", description: "Emotional intensity 0-100" },
                       estructura_beats: {
                         type: "array",
@@ -237,8 +296,8 @@ Responde usando la función analyze_transcript.`;
     const analysisJson = parsed.analysis;
     const variationsJson = parsed.variations;
 
-    // Estimate token cost (rough)
-    const inputTokens = Math.ceil(asset.transcript.length / 4);
+    // Estimate token cost
+    const inputTokens = Math.ceil(asset.transcript.length / 4) + (videoSignedUrl ? 1000 : 0);
     const outputTokens = Math.ceil(JSON.stringify(parsed).length / 4);
     const tokenCost = ((inputTokens * 0.00001) + (outputTokens * 0.00004));
 
@@ -274,7 +333,7 @@ Responde usando la función analyze_transcript.`;
         .from("jobs")
         .update({
           status: "DONE",
-          cost_json: { input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost: tokenCost },
+          cost_json: { input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost: tokenCost, visual_analysis: !!videoSignedUrl },
         })
         .eq("id", job.id);
     }

@@ -13,41 +13,15 @@ function json(body: unknown, status = 200) {
   });
 }
 
-const KIE_API_BASE = "https://api.kie.ai/api/v1";
-
-async function pollKieTask(taskId: string, apiKey: string, maxAttempts = 24): Promise<{ success: boolean; imageUrl?: string; error?: string }> {
-  for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-    console.log(`Polling KIE AI task ${taskId}, attempt ${i + 1}/${maxAttempts}`);
-
-    const res = await fetch(`${KIE_API_BASE}/flux/kontext/record-info?taskId=${taskId}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await res.json();
-    console.log("KIE poll response:", JSON.stringify(data));
-
-    if (data?.data?.successFlag === 1) {
-      const imageUrl = data?.data?.response?.resultImageUrl;
-      if (imageUrl) return { success: true, imageUrl };
-      return { success: false, error: "No image URL in success response" };
-    }
-    if (data?.data?.errorCode || data?.data?.successFlag === -1) {
-      return { success: false, error: `KIE AI generation failed: ${data.data.errorMessage || 'unknown error'}` };
-    }
-    // successFlag 0 = still generating, continue polling
-  }
-  return { success: false, error: "Timeout: KIE AI did not complete within 2 minutes" };
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const kieApiKey = Deno.env.get("KIE_AI_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!kieApiKey) return json({ error: "KIE_AI_API_KEY not configured" }, 500);
+    if (!LOVABLE_API_KEY) return json({ error: "LOVABLE_API_KEY not configured" }, 500);
 
     // Auth
     const authHeader = req.headers.get("Authorization");
@@ -95,8 +69,9 @@ Deno.serve(async (req) => {
     }
 
     // Create job record
+    const assetId = (render as any).assets.id;
     const { data: job } = await supabase.from("jobs").insert({
-      asset_id: (render as any).assets.id,
+      asset_id: assetId,
       render_id: render_id,
       type: "base_image",
       status: "RUNNING",
@@ -104,63 +79,97 @@ Deno.serve(async (req) => {
       attempts: 1,
     }).select().single();
 
-    // Build prompt
-    const actorDesc = render.actor_id || "a young, natural-looking person";
-    const scenarioDesc = render.scenario_prompt || "modern, well-lit interior";
-    const intensityLabel = (render.emotional_intensity ?? 50) > 70 ? "high energy, expressive" : (render.emotional_intensity ?? 50) > 40 ? "moderate, natural" : "calm, composed";
-    const productCtx = render.product_image_url ? "Person is holding/showing a beauty product." : "";
+    // Get signed URL for the original video as reference
+    const videoStoragePath = `${userId}/${assetId}/video.mp4`;
+    const { data: videoSignedData } = await supabase.storage
+      .from("ugc-assets")
+      .createSignedUrl(videoStoragePath, 60 * 30);
+    const videoRefUrl = videoSignedData?.signedUrl || null;
 
-    const prompt = `Professional UGC-style photo of ${actorDesc} in ${scenarioDesc}. ${intensityLabel} expression. Portrait orientation 9:16 aspect ratio. Natural lighting, authentic social media aesthetic. ${productCtx} No text overlays.`;
+    // Build the prompt
+    const scenarioDesc = render.scenario_prompt || "natural UGC-style scene, person talking to camera";
+    const intensityLabel = (render.emotional_intensity ?? 50) > 70 ? "high energy, very expressive" : (render.emotional_intensity ?? 50) > 40 ? "moderate, natural" : "calm, composed";
 
-    console.log("KIE AI prompt:", prompt);
+    const imagePrompt = videoRefUrl
+      ? `Look at this reference video frame. Generate a NEW photo that replicates the EXACT same composition:
+- Same camera distance and angle
+- Same type of background and setting
+- Same lighting conditions and color temperature
+- Same framing (how much of the person is visible)
 
-    // Call KIE AI to create task
-    const createRes = await fetch(`${KIE_API_BASE}/flux/kontext/generate`, {
+But change the PERSON completely — different face, different identity. Keep everything else as close to the original as possible.
+
+Additional scene details: ${scenarioDesc}
+Expression/energy: ${intensityLabel}
+Format: Portrait 9:16, natural smartphone camera quality (NOT studio photography). Should look like a real person filmed this on their phone.`
+      : `Generate a natural UGC-style photo matching this description exactly:
+${scenarioDesc}
+Expression/energy: ${intensityLabel}
+Format: Portrait 9:16, natural smartphone camera quality. Should look like a real selfie/video screenshot, NOT a professional studio photo.`;
+
+    console.log("Generating image with Lovable AI (gemini-3-pro-image-preview)");
+    console.log("Has video reference:", !!videoRefUrl);
+
+    // Build messages for the AI
+    const userContent: any[] = [];
+    if (videoRefUrl) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: videoRefUrl },
+      });
+    }
+    userContent.push({ type: "text", text: imagePrompt });
+
+    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${kieApiKey}`,
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        prompt,
-        aspectRatio: "9:16",
-        model: "flux-kontext-pro",
+        model: "google/gemini-3-pro-image-preview",
+        messages: [{ role: "user", content: userContent }],
+        modalities: ["image", "text"],
       }),
     });
 
-    const createData = await createRes.json();
-    console.log("KIE AI create response:", JSON.stringify(createData));
+    if (!aiResponse.ok) {
+      const errText = await aiResponse.text();
+      console.error("AI image generation error:", aiResponse.status, errText);
+      await supabase.from("jobs").update({ status: "FAILED", error_message: `AI error: ${aiResponse.status} - ${errText}` }).eq("id", job!.id);
 
-    if (createData?.code !== 200 || !createData?.data?.taskId) {
-      await supabase.from("jobs").update({ status: "FAILED", error_message: JSON.stringify(createData) }).eq("id", job!.id);
-      return json({ error: "Failed to create KIE AI task", details: createData }, 500);
+      if (aiResponse.status === 429) return json({ error: "Rate limit exceeded. Try again in a moment." }, 429);
+      if (aiResponse.status === 402) return json({ error: "AI credits exhausted." }, 402);
+      return json({ error: "Image generation failed" }, 500);
     }
 
-    const taskId = createData.data.taskId;
-    await supabase.from("jobs").update({ provider_job_id: taskId }).eq("id", job!.id);
+    const aiData = await aiResponse.json();
+    const imageData = aiData.choices?.[0]?.message?.images?.[0]?.image_url?.url;
 
-    // Poll for result
-    const result = await pollKieTask(taskId, kieApiKey);
-
-    if (!result.success) {
-      await supabase.from("jobs").update({ status: "FAILED", error_message: result.error }).eq("id", job!.id);
-      await supabase.from("renders").update({ status: "FAILED" }).eq("id", render_id);
-      return json({ error: result.error }, 500);
+    if (!imageData) {
+      console.error("No image in AI response:", JSON.stringify(aiData).slice(0, 500));
+      await supabase.from("jobs").update({ status: "FAILED", error_message: "No image in AI response" }).eq("id", job!.id);
+      return json({ error: "AI did not return an image" }, 500);
     }
 
-    // Download image and upload to Storage
-    console.log("Downloading image from:", result.imageUrl);
-    const imgRes = await fetch(result.imageUrl!);
-    const imgBlob = await imgRes.blob();
-    const imgBuffer = new Uint8Array(await imgBlob.arrayBuffer());
+    // Decode base64 image and upload to Storage
+    const base64Match = imageData.match(/^data:image\/(png|jpeg|webp);base64,(.+)$/);
+    if (!base64Match) {
+      console.error("Unexpected image format");
+      await supabase.from("jobs").update({ status: "FAILED", error_message: "Unexpected image format from AI" }).eq("id", job!.id);
+      return json({ error: "Unexpected image format" }, 500);
+    }
 
-    const assetId = (render as any).assets.id;
-    const storagePath = `${userId}/${assetId}/base-image-${render_id}.png`;
+    const imgType = base64Match[1];
+    const imgBase64 = base64Match[2];
+    const imgBytes = Uint8Array.from(atob(imgBase64), (c) => c.charCodeAt(0));
+
+    const storagePath = `${userId}/${assetId}/base-image-${render_id}.${imgType === "jpeg" ? "jpg" : imgType}`;
 
     const { error: uploadErr } = await supabase.storage
       .from("ugc-assets")
-      .upload(storagePath, imgBuffer, {
-        contentType: "image/png",
+      .upload(storagePath, imgBytes, {
+        contentType: `image/${imgType}`,
         upsert: true,
       });
 
@@ -186,11 +195,11 @@ Deno.serve(async (req) => {
     // Update job
     await supabase.from("jobs").update({
       status: "DONE",
-      cost_json: { provider: "kie_ai", model: "flux-kontext-pro", estimated_cost: 0.08 },
+      cost_json: { provider: "lovable_ai", model: "gemini-3-pro-image-preview", has_reference: !!videoRefUrl, estimated_cost: 0.05 },
     }).eq("id", job!.id);
 
-    console.log("Base image generated successfully");
-    return json({ image_url: signedUrl, cost: 0.08 });
+    console.log("Base image generated successfully with Lovable AI");
+    return json({ image_url: signedUrl, cost: 0.05 });
   } catch (err) {
     console.error("generate-base-image error:", err);
     return json({ error: err.message || "Internal server error" }, 500);
