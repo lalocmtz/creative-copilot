@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -43,6 +44,9 @@ const Studio = () => {
   const [intensity, setIntensity] = useState([50]);
   const [scenario, setScenario] = useState("");
   const [populated, setPopulated] = useState(false);
+  const [productImage, setProductImage] = useState<File | null>(null);
+  const [productPreview, setProductPreview] = useState<string | null>(null);
+  const [uploadingProduct, setUploadingProduct] = useState(false);
 
   // Auto-populate from blueprint data
   useEffect(() => {
@@ -114,9 +118,45 @@ const Studio = () => {
     });
   };
 
-  const handleGenerateImage = () => {
+  const handleProductImageSelect = async (file: File) => {
+    setProductImage(file);
+    setProductPreview(URL.createObjectURL(file));
+  };
+
+  const uploadProductImage = async (): Promise<string | null> => {
+    if (!productImage || !assetId || !user) return render?.product_image_url || null;
+    setUploadingProduct(true);
+    try {
+      const ext = productImage.name.split(".").pop() || "jpg";
+      const path = `${user.id}/${assetId}/product.${ext}`;
+      const { error } = await supabase.storage.from("ugc-assets").upload(path, productImage, { upsert: true });
+      if (error) throw error;
+      const { data: signed } = await supabase.storage.from("ugc-assets").createSignedUrl(path, 60 * 60 * 24 * 7);
+      return signed?.signedUrl || null;
+    } finally {
+      setUploadingProduct(false);
+    }
+  };
+
+  const handleGenerateImage = async () => {
     if (!render) return;
-    handleSaveDraft();
+    if (!productImage && !render.product_image_url) {
+      return; // Button is already disabled, this is a safety check
+    }
+    // Upload product image first
+    const productUrl = await uploadProductImage();
+    // Save draft with product URL
+    updateRender.mutate({
+      renderId: render.id,
+      fields: {
+        variation_level: parseInt(level),
+        actor_id: actor,
+        voice_id: voice,
+        emotional_intensity: intensity[0],
+        scenario_prompt: scenario,
+        product_image_url: productUrl,
+      },
+    });
     generateImage.mutate(render.id);
   };
 
@@ -310,11 +350,41 @@ const Studio = () => {
             </div>
 
             <div>
-              <label className="text-xs text-muted-foreground mb-1.5 block">Producto (opcional)</label>
-              <div className="border-2 border-dashed border-border rounded-lg p-6 flex flex-col items-center gap-2 hover:border-primary/50 transition-colors cursor-pointer">
-                <Upload className="w-5 h-5 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Arrastrá o seleccioná imagen</span>
-              </div>
+              <label className="text-xs text-muted-foreground mb-1.5 block">
+                Producto <span className="text-destructive">*</span>
+              </label>
+              {productPreview || render?.product_image_url ? (
+                <div className="relative rounded-lg overflow-hidden border border-border">
+                  <img
+                    src={productPreview || render?.product_image_url || ""}
+                    alt="Product"
+                    className="w-full h-32 object-contain bg-muted/20"
+                  />
+                  <button
+                    onClick={() => { setProductImage(null); setProductPreview(null); }}
+                    className="absolute top-1 right-1 bg-background/80 rounded-full p-1 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <label className="border-2 border-dashed border-border rounded-lg p-6 flex flex-col items-center gap-2 hover:border-primary/50 transition-colors cursor-pointer">
+                  <Upload className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">Arrastrá o seleccioná imagen</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleProductImageSelect(f);
+                    }}
+                  />
+                </label>
+              )}
+              {!productImage && !render?.product_image_url && (
+                <p className="text-[10px] text-destructive mt-1">Requerido para generar imagen</p>
+              )}
             </div>
           </div>
 
@@ -327,10 +397,10 @@ const Studio = () => {
 
             {!imageGenerated ? (
               <div className="space-y-3">
-                <CostDisplay amount="~$0.08" label="generación imagen" size="sm" />
+                <CostDisplay amount="~$0.05" label="generación imagen" size="sm" />
                 <Button
                   onClick={handleGenerateImage}
-                  disabled={generateImage.isPending || !render}
+                  disabled={generateImage.isPending || uploadingProduct || !render || (!productImage && !render?.product_image_url)}
                   className="w-full gap-2"
                   size="sm"
                 >

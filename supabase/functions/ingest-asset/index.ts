@@ -146,6 +146,26 @@ Deno.serve(async (req) => {
 
         if (uploadError) throw new Error(`Storage upload error: ${uploadError.message}`);
 
+        // Download and store cover/thumbnail image for visual analysis
+        const coverUrl = videoInfo.origin_cover || videoInfo.cover || videoInfo.ai_dynamic_cover;
+        if (coverUrl) {
+          try {
+            console.log("Downloading cover image:", coverUrl);
+            const coverRes = await fetch(coverUrl);
+            if (coverRes.ok) {
+              const coverBlob = await coverRes.blob();
+              const coverPath = `${user.id}/${asset_id}/thumbnail.jpg`;
+              await supabase.storage.from("ugc-assets").upload(coverPath, coverBlob, {
+                contentType: "image/jpeg",
+                upsert: true,
+              });
+              console.log("Cover image saved to storage");
+            }
+          } catch (coverErr) {
+            console.error("Failed to download cover (non-fatal):", coverErr);
+          }
+        }
+
         const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from("ugc-assets")
           .createSignedUrl(storagePath, 3600); // 1 hour expiry
@@ -170,6 +190,7 @@ Deno.serve(async (req) => {
                 : null,
               original_description: videoInfo.title || null,
               author: videoInfo.author?.nickname || null,
+              has_thumbnail: !!coverUrl,
             },
           })
           .eq("id", asset_id);
