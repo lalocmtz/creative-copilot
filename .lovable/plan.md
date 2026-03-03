@@ -1,90 +1,56 @@
 
-# Auto-Populate Studio from Blueprint Data
 
-## Current Problem
-When you open the Studio, everything is empty because:
-1. The `generate-blueprint` edge function doesn't exist yet (Phase 3 was not implemented)
-2. Without a blueprint, the Studio has no data to pre-fill the script, actor, scenario, etc.
-3. The asset is stuck at `VIDEO_INGESTED` status -- it needs blueprint generation first
+# Visual-Faithful Image Generation: Replicate Original Video Scene
 
-## What Needs to Happen
+## Problem
+Currently, the image generation creates generic UGC-style photos because:
+1. The blueprint's scenario prompt is generated from **text-only** (transcript) -- Gemini never sees the actual video
+2. The image generator (KIE AI) uses a vague text prompt like "Professional UGC-style photo of a person in a modern interior"
+3. Result: hyper-realistic but completely unrelated to the original video's composition, background, camera angle, distance, etc.
 
-### 1. Create `generate-blueprint` Edge Function
-Use Lovable AI (Gemini) to analyze the transcript and auto-generate:
-- The exact script (cloned from the original transcript)
-- Actor gender detection (from transcript/context clues)
-- A similar-but-different scenario description
-- An extensive, detailed prompt for base image generation
-- 3 variation levels with adjusted scripts
-- Risk/policy warnings
+## Solution: Two-Part Visual Analysis Pipeline
 
-No external API key needed -- uses Lovable AI's built-in Gemini model.
+### Part 1: Blueprint Enhancement -- Send Video Frame to Gemini
+During blueprint generation, extract a signed URL for the stored video and send it to Gemini as a **visual input** alongside the transcript. This way Gemini can:
+- See exactly how the person is framed (selfie, mirror, arm's length, etc.)
+- Describe the background precisely (bathroom tiles, bedroom, kitchen counter)
+- Note lighting conditions (warm bathroom light, natural window light, ring light)
+- Capture camera distance, angle, and composition
+- Detect clothing style, accessories, and body positioning
 
-### 2. Auto-populate Studio from Blueprint
-When Studio loads and a blueprint exists:
-- **Script**: Pre-fill with the Nivel 1 variation (exact clone of the original script)
-- **Actor**: Auto-select based on detected gender from the blueprint analysis
-- **Scenario**: Pre-fill with the AI-generated scenario description
-- **Voice**: Auto-select matching voice based on detected gender
-- **Emotional intensity**: Set from the blueprint's detected emotional level
+The `escenario_sugerido` field will become an **extremely specific image generation prompt** that replicates the exact visual composition.
 
-### 3. Improve the Flow
-- Blueprint page gets a "Generate Blueprint" button that calls the new edge function
-- Once generated, "Abrir Studio" navigates to Studio with everything pre-filled
-- User only needs to optionally upload product image, tweak settings, and hit "Generar Imagen Base"
+### Part 2: Image Generation -- Switch from KIE AI to Lovable AI with Reference Frame
+Replace KIE AI with Lovable AI's image generation model (`google/gemini-3-pro-image-preview`), which supports **image input as reference**. The function will:
+1. Download the original video frame from storage
+2. Send it as a reference image to the AI along with the ultra-detailed scene prompt
+3. Instruct the model to replicate the exact composition, distance, background, and lighting but with a **different person**
 
-## Technical Steps
+This produces images that match the original video's visual feel instead of generic stock-UGC photos.
 
-### Step 1: Edge Function `supabase/functions/generate-blueprint/index.ts`
-- Accepts `{ asset_id, force?: boolean }`
-- Validates asset status is at least `VIDEO_INGESTED`
-- Calls Lovable AI (Gemini 2.5 Flash) with the transcript
-- Prompt instructs the LLM to:
-  - Clone the exact script as Nivel 1
-  - Detect speaker gender and appearance hints
-  - Generate a detailed scenario prompt for image generation
-  - Create 3 variation levels
-  - Flag policy risks
-- Saves `analysis_json` and `variations_json` to the `blueprints` table
-- Updates asset status to `BLUEPRINT_GENERATED`
-- Creates a job record for cost tracking
+## Technical Changes
 
-### Step 2: Blueprint Page -- Add "Generate Blueprint" button
-- Show "Generar Blueprint" button when no blueprint exists
-- Cost estimate displayed before execution (~$0.02)
-- Loading state during generation
-- On success, show the full analysis
+### File 1: `supabase/functions/generate-blueprint/index.ts`
+- After fetching the asset, generate a signed URL for the stored video
+- Add the video frame as an `image_url` content block in the Gemini prompt (Gemini supports video/image URLs)
+- Update the system prompt to emphasize: "You are looking at the actual video. Describe the EXACT visual scene — camera distance, angle, background details, lighting, person's position relative to camera. The goal is to replicate this scene with a different person."
+- The `escenario_sugerido` output will now be a frame-accurate description
 
-### Step 3: Studio Auto-Population
-- Fetch the blueprint when Studio loads
-- Extract the Nivel 1 script and pre-fill the script textarea
-- Map detected gender to actor/voice selection
-- Pre-fill scenario from blueprint's `escenario_sugerido` field
-- Set emotional intensity from blueprint's detected level
-- Save all this to the render draft automatically
+### File 2: `supabase/functions/generate-base-image/index.ts`
+- Replace KIE AI with Lovable AI image generation (`google/gemini-3-pro-image-preview`)
+- Fetch the original video's stored frame/thumbnail as reference
+- Send the reference image + detailed scenario prompt to the AI
+- Instruction: "Replicate this exact scene composition, camera angle, distance, background, and lighting. Change ONLY the person. Keep everything else identical."
+- Download the resulting base64 image, upload to Supabase Storage, update the render record
+- Remove KIE AI dependency entirely
 
-### Blueprint JSON Schema (what the LLM returns)
-```text
-analysis_json: {
-  hook, angulo, emocion_dominante, mecanismo,
-  genero_detectado: "femenino" | "masculino",
-  escenario_sugerido: "detailed scenario description...",
-  intensidad_emocional: 70,
-  estructura_beats: [...],
-  riesgos_politica: [...],
-  sugerencia_mejora_retencion: "..."
-}
+### File 3: `src/pages/Studio.tsx`
+- No major changes needed -- the scenario field already displays and allows editing the prompt
+- The auto-populated prompt will simply be much more detailed and accurate now
 
-variations_json: [
-  { nivel: 1, titulo: "Clon exacto", guion: "exact transcript...", cambios_clave: [] },
-  { nivel: 2, titulo: "Variacion moderada", guion: "...", cambios_clave: [...] },
-  { nivel: 3, titulo: "Nuevo enfoque", guion: "...", cambios_clave: [...] }
-]
-```
+### File 4: `docs/tasks.md`
+- Mark visual analysis integration as completed
 
-### Files to Create/Edit
-- **New**: `supabase/functions/generate-blueprint/index.ts`
-- **Edit**: `src/pages/Blueprint.tsx` -- add generate button
-- **Edit**: `src/pages/Studio.tsx` -- auto-populate from blueprint data
-- **Edit**: `src/hooks/useSupabaseQueries.ts` -- add generate blueprint mutation
-- **Edit**: `docs/tasks.md` -- mark Phase 3 tasks
+## Expected Result
+When a user ingests a TikTok video of a woman filming herself in a bathroom mirror at arm's length with warm lighting, the generated image will show a **different woman** in a **similar bathroom**, at the **same distance from camera**, with **similar lighting and composition** -- not a random studio photo.
+
