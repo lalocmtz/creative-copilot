@@ -13,13 +13,28 @@ function json(body: unknown, status = 200) {
 }
 
 const KIE_BASE = "https://api.kie.ai/api/v1";
+const KIE_FILE_UPLOAD = "https://kieai.redpandaai.co/api/file-url-upload";
 const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 
-// ElevenLabs voice mapping via KIE
+// ElevenLabs voice IDs — full catalog
 const VOICE_MAP: Record<string, string> = {
-  v1: "EXAVITQu4vr4xnSDxMaL", // Sarah
-  v2: "JBFqnCBsd6RMkjVDRZzb", // George
-  v3: "pFZP5JQG7iQjIQuC4Bku", // Lily
+  // Female
+  sarah: "EXAVITQu4vr4xnSDxMaL",
+  lily: "pFZP5JQG7iQjIQuC4Bku",
+  jessica: "cgSgspJ2msm6clMCkdW9",
+  laura: "FGY2WhTYpPnrIDTdsKH5",
+  alice: "Xb7hH8MSUJpSbSDYk0k2",
+  // Male
+  george: "JBFqnCBsd6RMkjVDRZzb",
+  charlie: "IKne3meq5aSn9XLyUdCD",
+  brian: "nPczCjzI2devNBz1zQrb",
+  liam: "TX3LPaxmHKxFdv7VOQHJ",
+  eric: "cjVigY5qzO86Huf0OWal",
+  // Legacy IDs (backward compat)
+  v1: "EXAVITQu4vr4xnSDxMaL",
+  v2: "JBFqnCBsd6RMkjVDRZzb",
+  v3: "pFZP5JQG7iQjIQuC4Bku",
 };
 
 async function condensScript(scriptText: string, lovableApiKey: string): Promise<string> {
@@ -47,14 +62,9 @@ async function condensScript(scriptText: string, lovableApiKey: string): Promise
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    console.error("[CONDENSE] AI error:", res.status, errText);
-    // Fallback: truncate to ~30 words
+    console.error("[CONDENSE] AI error:", res.status, await res.text());
     const words = scriptText.split(/\s+/);
-    if (words.length > 30) {
-      return words.slice(0, 30).join(" ");
-    }
-    return scriptText;
+    return words.length > 30 ? words.slice(0, 30).join(" ") : scriptText;
   }
 
   const data = await res.json();
@@ -71,6 +81,8 @@ Deno.serve(async (req) => {
     if (!KIE_API_KEY) throw new Error("KIE_AI_API_KEY not configured");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
+    if (!ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY not configured");
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return json({ error: "Unauthorized" }, 401);
@@ -100,7 +112,7 @@ Deno.serve(async (req) => {
     const baseImageUrl = render.base_image_url;
     if (!baseImageUrl) return json({ error: "No base image URL" }, 400);
 
-    // Resolve script: prefer client-sent, fallback to blueprint
+    // Resolve script
     let scriptText = clientScript || "";
     if (!scriptText) {
       const { data: bp } = await supabaseAdmin.from("blueprints").select("variations_json").eq("asset_id", assetId).single();
@@ -142,41 +154,118 @@ Deno.serve(async (req) => {
     }
     console.log(`[KICKOFF] Script: ${wordCount} words → condensed: ${condensedScript.split(/\s+/).length} words`);
 
-    // === STEP 1: TTS via KIE (ElevenLabs) ===
-    const voiceId = VOICE_MAP[render.voice_id || "v1"] || VOICE_MAP.v1;
-    console.log(`[KICKOFF] Starting TTS for voice ${render.voice_id} → ElevenLabs ${voiceId}`);
+    // === STEP 1: TTS via ElevenLabs directly (synchronous) ===
+    const voiceId = VOICE_MAP[render.voice_id || "sarah"] || VOICE_MAP.sarah;
+    console.log(`[KICKOFF] Starting ElevenLabs TTS for voice ${render.voice_id} → ${voiceId}`);
 
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         _tasks: { condensed_script: condensedScript },
-        _progress: { step: "generating_tts", detail: "Generando voz con TTS…", updated_at: new Date().toISOString() },
+        _progress: { step: "generating_tts", detail: "Generando voz con ElevenLabs…", updated_at: new Date().toISOString() },
         _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
       },
     }).eq("id", render_id);
 
-    const ttsRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
+    const ttsRes = await fetch(
+      `${ELEVENLABS_TTS_URL}/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": ELEVENLABS_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: condensedScript,
+          model_id: "eleven_multilingual_v2",
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.5,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
+
+    if (!ttsRes.ok) {
+      const errText = await ttsRes.text();
+      throw new Error(`ElevenLabs TTS failed (${ttsRes.status}): ${errText}`);
+    }
+
+    const audioBuffer = await ttsRes.arrayBuffer();
+    console.log(`[KICKOFF] TTS audio received: ${audioBuffer.byteLength} bytes`);
+
+    // Upload audio to Supabase Storage
+    const audioPath = `${userId}/${assetId}/renders/${render_id}/tts_audio.mp3`;
+    await supabaseAdmin.storage.from("ugc-assets").upload(audioPath, audioBuffer, { contentType: "audio/mpeg", upsert: true });
+    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 2); // 2h expiry
+    const ttsAudioUrl = audioSigned?.signedUrl;
+    if (!ttsAudioUrl) throw new Error("Failed to get signed URL for TTS audio");
+    console.log(`[KICKOFF] TTS audio uploaded to storage`);
+
+    // === STEP 2: Upload files to KIE and start lip-sync ===
+    await supabaseAdmin.from("renders").update({
+      cost_breakdown_json: {
+        _tasks: { condensed_script: condensedScript },
+        _progress: { step: "starting_lipsync", detail: "Preparando lip-sync…", updated_at: new Date().toISOString() },
+        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText, _tts_audio_url: ttsAudioUrl,
+      },
+    }).eq("id", render_id);
+
+    // Upload TTS audio to KIE
+    const audioFileName = `tts_${render_id}.mp3`;
+    const uploadAudioRes = await fetch(KIE_FILE_UPLOAD, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fileUrl: ttsAudioUrl, uploadPath: audioFileName }),
+    });
+    const uploadAudioData = await uploadAudioRes.json();
+    const kieAudioUrl = uploadAudioData?.data?.downloadUrl || uploadAudioData?.data?.url;
+    if (!kieAudioUrl) throw new Error(`Audio upload to KIE failed: ${JSON.stringify(uploadAudioData)}`);
+    console.log("[KICKOFF] TTS audio uploaded to KIE:", kieAudioUrl);
+
+    // Upload base image to KIE
+    const imageFileName = `base_${render_id}.jpg`;
+    const uploadImageRes = await fetch(KIE_FILE_UPLOAD, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fileUrl: baseImageUrl, uploadPath: imageFileName }),
+    });
+    const uploadImageData = await uploadImageRes.json();
+    const kieImageUrl = uploadImageData?.data?.downloadUrl || uploadImageData?.data?.url;
+    if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
+    console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
+
+    // Start InfiniteTalk lip-sync
+    const lipsyncPrompt = "Natural head movement, subtle expressions matching speech tone, gentle eye movement, realistic lip sync.";
+    const lipsyncRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "elevenlabs/text-to-speech-turbo-2-5",
-        input: { text: condensedScript, voice_id: voiceId },
+        model: "infinitalk/from-audio",
+        input: {
+          image_url: kieImageUrl,
+          audio_url: kieAudioUrl,
+          prompt: lipsyncPrompt,
+          resolution: "720p",
+        },
       }),
     });
-    const ttsData = await ttsRes.json();
-    if (ttsData.code !== 200) throw new Error(`TTS task failed: ${ttsData.msg}`);
-    const ttsTaskId = ttsData.data.taskId;
-    console.log(`[KICKOFF] TTS task started: ${ttsTaskId}`);
+    const lipsyncData = await lipsyncRes.json();
+    if (lipsyncData.code !== 200) throw new Error(`Lip-sync task failed: ${lipsyncData.msg}`);
+    const lipsyncTaskId = lipsyncData.data.taskId;
+    console.log(`[KICKOFF] Lip-sync task started: ${lipsyncTaskId}`);
 
-    // Save TTS task ID — lip-sync will be started by poll-render-status after TTS completes
+    // Save lip-sync task ID for polling
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
-        _tasks: { tts_task_id: ttsTaskId, condensed_script: condensedScript },
-        _progress: { step: "generating_tts", detail: "Generando voz del guion condensado…", updated_at: new Date().toISOString() },
-        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _tasks: { lipsync_task_id: lipsyncTaskId, condensed_script: condensedScript },
+        _progress: { step: "generating_lipsync", detail: "Sincronizando labios + audio (~2-4 min)…", updated_at: new Date().toISOString() },
+        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText, _tts_audio_url: ttsAudioUrl,
       },
     }).eq("id", render_id);
 
-    return json({ started: true, tts_task_id: ttsTaskId, condensed_script: condensedScript });
+    return json({ started: true, lipsync_task_id: lipsyncTaskId, condensed_script: condensedScript });
   } catch (err: any) {
     console.error("[ERROR]", err.message);
     try {

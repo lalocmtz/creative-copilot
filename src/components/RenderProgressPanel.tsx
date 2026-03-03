@@ -9,8 +9,8 @@ interface ProgressInfo {
 
 const STEPS = [
   { key: "condensing_script", label: "Condensando guion a 10s…", pct: 5 },
-  { key: "generating_tts", label: "Generando voz (TTS)…", pct: 15 },
-  { key: "starting_lipsync", label: "Iniciando lip-sync…", pct: 25 },
+  { key: "generating_tts", label: "Generando voz (ElevenLabs)…", pct: 15 },
+  { key: "starting_lipsync", label: "Subiendo archivos para lip-sync…", pct: 30 },
   { key: "generating_lipsync", label: "Sincronizando labios + audio (~2-4 min)…", pct: 55 },
   { key: "downloading", label: "Descargando video final", pct: 85 },
   { key: "uploading", label: "Subiendo video final", pct: 95 },
