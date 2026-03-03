@@ -54,18 +54,24 @@ Deno.serve(async (req) => {
       return json({ error: `Cannot generate image: render status is ${render.status}` }, 400);
     }
 
-    // Idempotency check
-    const idempotencyKey = `base_image:${render_id}`;
-    const { data: existingJob } = await supabase
-      .from("jobs")
-      .select("*")
-      .eq("idempotency_key", idempotencyKey)
-      .eq("status", "DONE")
-      .maybeSingle();
+    // Idempotency: skip cache when regenerating (status is IMAGE_GENERATED)
+    const isRegenerate = render.status === "IMAGE_GENERATED";
+    const idempotencyKey = isRegenerate
+      ? `base_image:${render_id}:${Date.now()}`
+      : `base_image:${render_id}`;
 
-    if (existingJob && render.base_image_url) {
-      console.log("Base image already generated, returning cached result");
-      return json({ image_url: render.base_image_url, cached: true });
+    if (!isRegenerate) {
+      const { data: existingJob } = await supabase
+        .from("jobs")
+        .select("*")
+        .eq("idempotency_key", `base_image:${render_id}`)
+        .eq("status", "DONE")
+        .maybeSingle();
+
+      if (existingJob && render.base_image_url) {
+        console.log("Base image already generated, returning cached result");
+        return json({ image_url: render.base_image_url, cached: true });
+      }
     }
 
     // Create job record
@@ -86,9 +92,14 @@ Deno.serve(async (req) => {
       .createSignedUrl(thumbPath, 60 * 30);
     const thumbRefUrl = thumbSignedData?.signedUrl || null;
 
-    // Build the prompt
+    // Build the prompt — always instruct product-in-hand
     const scenarioDesc = render.scenario_prompt || "natural UGC-style scene, person talking to camera";
     const intensityLabel = (render.emotional_intensity ?? 50) > 70 ? "high energy, very expressive" : (render.emotional_intensity ?? 50) > 40 ? "moderate, natural" : "calm, composed";
+    const productImageUrl = render.product_image_url || null;
+
+    const productInstruction = productImageUrl
+      ? `CRITICAL: The person MUST be holding the EXACT product shown in the product reference image in their hand, showing it naturally to the camera. The product must be clearly visible, realistic, and match the reference image precisely. Do NOT invent a different product.`
+      : `The person should be holding a product naturally in their hand, showing it to the camera.`;
 
     const imagePrompt = thumbRefUrl
       ? `Look at this reference image (a frame from the original TikTok video). Generate a NEW photo that replicates the EXACT same composition:
@@ -99,23 +110,35 @@ Deno.serve(async (req) => {
 
 But change the PERSON completely — different face, different identity. Keep everything else as close to the original as possible.
 
+${productInstruction}
+
 Additional scene details: ${scenarioDesc}
 Expression/energy: ${intensityLabel}
 Format: Portrait 9:16, natural smartphone camera quality (NOT studio photography). Should look like a real person filmed this on their phone.`
       : `Generate a natural UGC-style photo matching this description exactly:
 ${scenarioDesc}
 Expression/energy: ${intensityLabel}
+
+${productInstruction}
+
 Format: Portrait 9:16, natural smartphone camera quality. Should look like a real selfie/video screenshot, NOT a professional studio photo.`;
 
     console.log("Generating image with Lovable AI (gemini-3-pro-image-preview)");
     console.log("Has thumbnail reference:", !!thumbRefUrl);
+    console.log("Has product image reference:", !!productImageUrl);
 
-    // Build messages for the AI
+    // Build messages for the AI — include product image as additional reference
     const userContent: any[] = [];
     if (thumbRefUrl) {
       userContent.push({
         type: "image_url",
         image_url: { url: thumbRefUrl },
+      });
+    }
+    if (productImageUrl) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: productImageUrl },
       });
     }
     userContent.push({ type: "text", text: imagePrompt });

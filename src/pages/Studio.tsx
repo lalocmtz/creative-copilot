@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import PipelineStepper from "@/components/PipelineStepper";
 import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
-import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2, AlertTriangle } from "lucide-react";
+import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2, AlertTriangle, RefreshCw } from "lucide-react";
 import RenderProgressPanel from "@/components/RenderProgressPanel";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
@@ -488,16 +488,32 @@ const Studio = () => {
                   </div>
                 )}
                 {!imageApproved ? (
-                  <Button
-                    onClick={handleApproveImage}
-                    disabled={approveImage.isPending}
-                    variant="outline"
-                    className="w-full gap-2 border-success text-success hover:bg-success/10"
-                    size="sm"
-                  >
-                    {approveImage.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    Aprobar Imagen
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleApproveImage}
+                      disabled={approveImage.isPending || generateImage.isPending}
+                      variant="outline"
+                      className="flex-1 gap-2 border-success text-success hover:bg-success/10"
+                      size="sm"
+                    >
+                      {approveImage.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      Aprobar
+                    </Button>
+                    <Button
+                      onClick={() => render && generateImage.mutate(render.id)}
+                      disabled={generateImage.isPending || approveImage.isPending}
+                      variant="outline"
+                      className="flex-1 gap-2"
+                      size="sm"
+                    >
+                      {generateImage.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                      Regenerar ~$0.05
+                    </Button>
+                  </div>
                 ) : (
                   <p className="text-xs text-success text-center font-medium">✓ Imagen aprobada</p>
                 )}
