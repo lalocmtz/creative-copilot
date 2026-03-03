@@ -10,12 +10,12 @@
 
 ### 1.1 Enable Lovable Cloud + Database Schema
 - [x] Enable Lovable Cloud (Supabase backend)
-- [ ] Create enum types for asset and render statuses
-- [ ] Create `assets` table with RLS
-- [ ] Create `blueprints` table with RLS
-- [ ] Create `renders` table with RLS
-- [ ] Create `jobs` table for pipeline traceability
-- [ ] Create Supabase Storage bucket `ugc-assets` (videos, images, renders)
+- [x] Create enum types for asset and render statuses
+- [x] Create `assets` table with RLS
+- [x] Create `blueprints` table with RLS
+- [x] Create `renders` table with RLS
+- [x] Create `jobs` table for pipeline traceability
+- [x] Create Supabase Storage bucket `ugc-assets` (videos, images, renders)
 
 #### SQL: Enum Types
 ```sql
