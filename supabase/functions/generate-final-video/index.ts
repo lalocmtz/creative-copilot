@@ -238,13 +238,12 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "kling/v2.0/image2video",
+        model: "kling-2.6/image-to-video",
         input: {
-          image_url: kieImageUrl,
+          image_urls: [kieImageUrl],
           prompt: i2vPrompt,
-          negative_prompt: "logos, text, watermark, famous faces, distorted faces, extra limbs",
+          sound: false,
           duration: "10",
-          aspect_ratio: "9:16",
         },
       }),
     });
