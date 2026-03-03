@@ -20,7 +20,7 @@ const VOICE_MAP: Record<string, string> = {
   v3: "Lily",
 };
 
-async function pollTask(taskId: string, apiKey: string, maxAttempts = 60, intervalMs = 10000): Promise<any> {
+async function pollTask(taskId: string, apiKey: string, maxAttempts = 60, intervalMs = 8000): Promise<any> {
   for (let i = 0; i < maxAttempts; i++) {
     const res = await fetch(`${KIE_BASE}/jobs/recordInfo?taskId=${taskId}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -48,6 +48,13 @@ async function getDownloadUrl(fileUrl: string, apiKey: string): Promise<string> 
   const result = await res.json();
   if (result.code !== 200) throw new Error(`Download URL error: ${result.msg}`);
   return result.data;
+}
+
+// Helper to update progress on the render record so frontend can poll it
+async function updateProgress(supabaseAdmin: any, renderId: string, step: string, detail?: string) {
+  await supabaseAdmin.from("renders").update({
+    cost_breakdown_json: { _progress: { step, detail, updated_at: new Date().toISOString() } },
+  }).eq("id", renderId);
 }
 
 Deno.serve(async (req) => {
@@ -84,6 +91,7 @@ Deno.serve(async (req) => {
     if (!script) return json({ error: "No script found" }, 400);
 
     await supabaseAdmin.from("renders").update({ status: "RENDERING" }).eq("id", render_id);
+    await updateProgress(supabaseAdmin, render_id, "tts_starting", "Generando audio con IA…");
 
     const idempotencyKey = `final_video:${render_id}`;
     const { data: existingJob } = await supabaseAdmin.from("jobs").select("*").eq("idempotency_key", idempotencyKey).eq("status", "DONE").maybeSingle();
@@ -106,14 +114,19 @@ Deno.serve(async (req) => {
     const ttsTaskId = ttsData.data.taskId;
     console.log(`[TTS] Task: ${ttsTaskId}`);
 
+    await updateProgress(supabaseAdmin, render_id, "tts_processing", "Procesando voz…");
     const ttsResult = await pollTask(ttsTaskId, KIE_API_KEY, 30, 5000);
     const ttsFileUrl = ttsResult.resultUrls?.[0];
     if (!ttsFileUrl) throw new Error("TTS returned no audio URL");
     console.log(`[TTS] Done`);
     costBreakdown.tts = { provider: "elevenlabs", estimated_usd: 0.03 };
 
+    await updateProgress(supabaseAdmin, render_id, "tts_done", "Audio generado ✓");
+
     // STEP 2: Image-to-Video
     console.log("[VIDEO] Starting...");
+    await updateProgress(supabaseAdmin, render_id, "video_starting", "Iniciando generación de video…");
+
     const imageUrl = render.base_image_url;
     if (!imageUrl) throw new Error("No base image URL");
     const motionPrompt = `A person naturally speaking and gesturing while presenting a product. ${render.scenario_prompt || "Clean, well-lit setting."}. Smooth, natural movement. 9:16 vertical video.`;
@@ -128,11 +141,14 @@ Deno.serve(async (req) => {
     const videoTaskId = videoData.data.taskId;
     console.log(`[VIDEO] Task: ${videoTaskId}`);
 
-    const videoResult = await pollTask(videoTaskId, KIE_API_KEY, 60, 10000);
+    await updateProgress(supabaseAdmin, render_id, "video_generating", "Video generándose (~3 min)…");
+    const videoResult = await pollTask(videoTaskId, KIE_API_KEY, 60, 8000);
     const videoFileUrl = videoResult.resultUrls?.[0];
     if (!videoFileUrl) throw new Error("Video returned no URL");
     console.log(`[VIDEO] Done`);
     costBreakdown.video = { provider: "kling", model: "v2-1-master", estimated_usd: 0.80 };
+
+    await updateProgress(supabaseAdmin, render_id, "uploading", "Subiendo archivos…");
 
     // STEP 3: Download + upload to storage
     console.log("[STORAGE] Uploading...");
@@ -170,7 +186,7 @@ Deno.serve(async (req) => {
       const body = await req.clone().json().catch(() => ({}));
       if (body.render_id) {
         const sa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-        await sa.from("renders").update({ status: "FAILED" }).eq("id", body.render_id);
+        await sa.from("renders").update({ status: "FAILED", cost_breakdown_json: { _progress: { step: "failed", detail: err.message } } }).eq("id", body.render_id);
       }
     } catch (_) {}
     return json({ error: err.message }, 500);
