@@ -50,6 +50,16 @@ Deno.serve(async (req) => {
     const baseImageUrl = render.base_image_url;
     if (!baseImageUrl) return json({ error: "No base image URL" }, 400);
 
+    // Read source video duration from asset metadata
+    const { data: assetData } = await supabaseAdmin.from("assets").select("metadata_json").eq("id", assetId).single();
+    const rawDuration = (assetData?.metadata_json as any)?.duration;
+    const sourceDuration = typeof rawDuration === "number" ? rawDuration : 30;
+    const MAX_DURATION = 30;
+    const MIN_DURATION = 3;
+    const effectiveDuration = Math.max(MIN_DURATION, Math.min(sourceDuration, MAX_DURATION));
+    const durationCapped = sourceDuration > MAX_DURATION;
+    console.log(`[KICKOFF] Source duration: ${sourceDuration}s, effective: ${effectiveDuration}s, capped: ${durationCapped}`);
+
     // Set status to RENDERING
     await supabaseAdmin.from("renders").update({ status: "RENDERING" }).eq("id", render_id);
 
@@ -97,23 +107,30 @@ Deno.serve(async (req) => {
     if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
-    // Step 4: Create motion control task (Kling 2.6)
+    // Step 4: Create motion control task (Kling 2.6) — max 30s
     const motionPrompt = render.scenario_prompt
       ? `A person in ${render.scenario_prompt}. Natural movement and expression.`
       : "A person speaking naturally with expressive gestures.";
+
+    const motionInput: Record<string, unknown> = {
+      input_urls: [kieImageUrl],
+      video_urls: [kieVideoUrl],
+      character_orientation: "video",
+      mode: "1080p",
+      prompt: motionPrompt,
+    };
+    // Try passing duration to cap at 30s (API may accept it)
+    if (durationCapped) {
+      motionInput.duration = effectiveDuration;
+      motionInput.end_time = effectiveDuration;
+    }
 
     const motionRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "kling-2.6/motion-control",
-        input: {
-          input_urls: [kieImageUrl],
-          video_urls: [kieVideoUrl],
-          character_orientation: "video",
-          mode: "1080p",
-          prompt: motionPrompt,
-        },
+        input: motionInput,
       }),
     });
     const motionData = await motionRes.json();
@@ -125,12 +142,19 @@ Deno.serve(async (req) => {
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         _tasks: { motion_task_id: motionTaskId },
-        _progress: { step: "motion_starting", detail: "Iniciando transferencia de movimiento…", updated_at: new Date().toISOString() },
+        _progress: {
+          step: "motion_starting",
+          detail: durationCapped
+            ? `Iniciando motion transfer (${effectiveDuration}s de ${sourceDuration}s originales)…`
+            : `Iniciando transferencia de movimiento (${effectiveDuration}s)…`,
+          updated_at: new Date().toISOString(),
+        },
         _job_id: job?.id,
         _image_url: baseImageUrl,
         _source_video_path: sourceVideoPath,
         _user_id: userId,
         _asset_id: assetId,
+        _duration: { source: sourceDuration, effective: effectiveDuration, capped: durationCapped },
       },
     }).eq("id", render_id);
 
