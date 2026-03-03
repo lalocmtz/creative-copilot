@@ -1,36 +1,62 @@
 
 
-# Plan: Fix Image Prompt to Avoid Cloning Person/Environment
+# Plan: Integrar ElevenLabs Directo + Voces por Género Detectado
 
-## Problem
-The current prompt tells the AI to "Copy the background type" and "Match the exact framing from IMAGE 1" — this causes it to literally clone the person's face, room, furniture, and even small details like the trash can. This is a plagiarism risk.
+## Situación Actual
+- TTS se genera vía **KIE AI** como intermediario de ElevenLabs — funciona pero agrega latencia y costo intermedio
+- Las voces son 3 fijas (Sarah, George, Lily) sin filtrar por género
+- El blueprint ya detecta `genero_detectado` ("femenino"/"masculino") del hablante original
 
-## What Needs to Change
-Only the prompt text in `supabase/functions/generate-base-image/index.ts` (lines 102-165). No UI or hook changes.
+## Solución
 
-## Key Prompt Adjustments
+### 1. `generate-final-video/index.ts` — Llamar ElevenLabs directamente
 
-### 1. System Prompt — Add anti-cloning rule
-Add to ABSOLUTE RULES:
-- "NEVER replicate the reference person's face. Generate a COMPLETELY DIFFERENT person with only similar demographic traits (age range, gender, build, facial hair style)."
-- "NEVER copy the exact room/background. Create a DIFFERENT environment of the same general type."
+Reemplazar la llamada a KIE para TTS con una llamada directa a la API de ElevenLabs:
+- Usar `ELEVENLABS_API_KEY` (necesitamos agregarla como secret)
+- Endpoint: `https://api.elevenlabs.io/v1/text-to-speech/{voiceId}?output_format=mp3_44100_128`
+- El audio se genera sincrónicamente (no necesita polling)
+- Subir el audio resultante a Supabase Storage
+- Luego pasar esa URL al paso de lip-sync (InfiniteTalk vía KIE sigue igual)
 
-### 2. Image Labeling — Change IMAGE 1 instructions
-Currently says: "Copy the camera angle, distance, framing, **background type**, and lighting direction"
+Esto **elimina el paso de polling de TTS** — el audio está listo antes de retornar, simplificando el flujo a: Condense → TTS (sync) → Start LipSync → Poll LipSync.
 
-Change to: "Use as **inspiration only** for camera angle and distance. Do NOT copy the room, furniture, wall colors, or any identifiable background elements. Create a completely different environment of the same general type (indoor/outdoor)."
+### 2. Ampliar catálogo de voces con género
 
-### 3. User Prompt — PERSON section
-Currently: "New person (different identity from reference)"
+Actualizar `src/pages/Studio.tsx` con más voces de ElevenLabs, agrupadas por género:
 
-Change to: "A COMPLETELY DIFFERENT person — different face, different hair, different skin tone variation. Only preserve broad traits: same gender, similar age range, similar build, similar facial hair style (if any). The person must NOT be recognizable as the same individual."
+**Femeninas:**
+- Sarah (EXAVITQu4vr4xnSDxMaL) — Cálida, natural
+- Lily (pFZP5JQG7iQjIQuC4Bku) — Energética
+- Jessica (cgSgspJ2msm6clMCkdW9) — Joven, dinámica
+- Laura (FGY2WhTYpPnrIDTdsKH5) — Profesional
+- Alice (Xb7hH8MSUJpSbSDYk0k2) — Clara, amigable
 
-### 4. User Prompt — COMPOSITION section  
-Currently: "Match the exact camera distance, angle, background type, and framing from IMAGE 1"
+**Masculinas:**
+- George (JBFqnCBsd6RMkjVDRZzb) — Confiable
+- Charlie (IKne3meq5aSn9XLyUdCD) — Casual
+- Brian (nPczCjzI2devNBz1zQrb) — Firme
+- Liam (TX3LPaxmHKxFdv7VOQHJ) — Joven, enérgico
+- Eric (cjVigY5qzO86Huf0OWal) — Versátil
 
-Change to: "Similar camera distance and framing style as IMAGE 1, but in a DIFFERENT room/location. Change wall color, furniture, floor, decorations. Keep the same general vibe (e.g., casual indoor) but make the space clearly distinct."
+### 3. Filtrar voces por género detectado en el blueprint
 
-### 5. FORBIDDEN section — Add
-- "Copying the reference person's face or distinctive features"
-- "Replicating the exact room, furniture placement, or background details from the reference"
+- Leer `analysis_json.genero_detectado` del blueprint
+- Filtrar el selector de voces para mostrar solo las del género correspondiente
+- Pre-seleccionar la primera voz del género correcto automáticamente
+- Permitir al usuario ver todas si quiere (toggle "Ver todas las voces")
+
+### 4. `poll-render-status/index.ts` — Simplificar
+
+- Ya no necesita Phase 1 (TTS polling) porque el audio se genera sincrónicamente
+- Solo necesita Phase 2 (iniciar lip-sync con la URL del audio ya guardada) y Phase 3 (poll lip-sync)
+
+### 5. Secret necesario
+
+- Agregar `ELEVENLABS_API_KEY` como secret del proyecto
+
+## Archivos a modificar
+1. `supabase/functions/generate-final-video/index.ts` — ElevenLabs directo + upload audio a storage
+2. `supabase/functions/poll-render-status/index.ts` — Simplificar (quitar polling TTS)
+3. `src/pages/Studio.tsx` — Ampliar voces, filtrar por género
+4. `src/components/RenderProgressPanel.tsx` — Quitar paso "generating_tts" (ahora es instantáneo dentro del kickoff)
 
