@@ -1,58 +1,42 @@
 
 
-# Plan: Pipeline Sora2 I2V + Multi-Model Fallback + TTS Speed Fix
+# Plan: Auto-Blueprint After Ingestion + UGC Sales Video Prompt Optimization
 
-## Problema Actual
-1. Solo hay un modelo (Kling 2.6) — si falla, todo falla
-2. La voz TTS es lenta y no se siente UGC
-3. No hay fallback automático entre modelos
+## What Changes
 
-## Solución
+### 1. Auto-trigger Blueprint after Ingestion (`src/pages/Workspace.tsx`)
+Currently after ingestion completes (line 265), the user sees "Ingesta Completa" but has to manually click "Generar Blueprint". 
 
-### 1. `generate-final-video/index.ts` — Multi-Model Fallback Chain
+**Fix**: After `setIngestPhase("done")` in `handleAnalyze`, automatically call `generateBlueprint.mutate({ assetId: newAsset.id, force: false })` and add a log "Generando blueprint automáticamente…". This eliminates the manual step entirely — the flow becomes: paste URL → click Analyze → ingestion + blueprint happen in sequence automatically.
 
-Reemplazar la llamada única a Kling con un **fallback automático** que prueba hasta 3 modelos en secuencia:
+Also handle the cached asset case (line 251-252): if asset exists but no blueprint yet, auto-trigger blueprint there too.
 
-```text
-1. kling/v2-1-master/image-to-video  (mejor calidad UGC)
-2. kling-2.6/image-to-video          (actual, estable)
-3. sora-2-image-to-video             (fallback alternativo)
-```
+### 2. Optimize I2V Prompt for UGC Sales Videos (`supabase/functions/generate-final-video/index.ts`)
+The current prompt is generic. Enhance it to explicitly instruct:
+- This is a **UGC sales/recommendation video for TikTok Shop**
+- Must replicate the **exact same camera angle, framing, and shot composition** from the base image
+- **Same product** must be visible and featured prominently
+- **Different person** (already handled by anti-cloning in image generation)
+- Structure: hook → demo/proof → offer → CTA within 10 seconds
+- Emphasize authentic selling energy, product interaction, recommendation tone
 
-Cada modelo tiene diferente esquema de input en KIE:
-- **Kling V2.1 Master**: `image_url` (string), soporta `negative_prompt`, `cfg_scale`
-- **Kling 2.6**: `image_urls` (array), `sound`, `duration`
-- **Sora2**: `image_urls` (array), `aspect_ratio`, `n_frames`
+The prompt will incorporate the blueprint analysis (hook, angle, emotion) and the condensed script to give Sora/Kling maximum context about what the video should convey as a sales piece.
 
-La función itera la lista. Si un modelo devuelve error (code != 200), logea y prueba el siguiente. El `kling_task_id` y el modelo usado se guardan en `cost_breakdown_json._tasks`.
+### 3. Use Gemini to Generate a Detailed Sora Prompt (`supabase/functions/generate-final-video/index.ts`)
+Add a new step between script condensation and I2V task creation: call Gemini to generate a structured shot-by-shot prompt based on:
+- The original transcript
+- The blueprint analysis (hook, angle, emotion, beat structure)
+- The scenario prompt
+- The condensed script
 
-### 2. TTS Speed Fix
+This produces a much more detailed and effective prompt for Sora/Kling, following the user's "Prompt Maestro" pattern with timing beats (0-2s hook, 2-6s proof, 6-8s offer, 8-10s CTA).
 
-Añadir `speed: 1.15` a los voice_settings de ElevenLabs para que suene más natural/UGC. Bajar `stability` a `0.4` para más variación emocional.
+## Files to Modify
+- `src/pages/Workspace.tsx` — auto-trigger blueprint after ingestion
+- `supabase/functions/generate-final-video/index.ts` — Gemini prompt maestro + UGC sales-optimized I2V prompt
 
-### 3. Prompt I2V mejorado
-
-Hacer el prompt más descriptivo y UGC-específico, referenciando el scenario y el script condensado para que el modelo genere movimiento contextual relevante. Incluir `negative_prompt` donde el modelo lo soporte.
-
-### 4. `poll-render-status/index.ts` — Guardar modelo usado
-
-Añadir el nombre del modelo que se usó en el cost_breakdown final para trazabilidad. La lógica de polling ya es genérica (task ID + checkTask), no necesita cambios estructurales.
-
-### 5. `RenderProgressPanel.tsx` — Sin cambios
-
-Los 3 pasos actuales (`generating_tts`, `animating_image`, `finalizing`) ya son correctos.
-
-### 6. `Workspace.tsx` — Sin cambios
-
-El `VideoWithAudioOverlay` y el polling ya están correctos.
-
-## Archivos a Modificar
-- `supabase/functions/generate-final-video/index.ts` — fallback chain + TTS speed
-- `supabase/functions/poll-render-status/index.ts` — guardar modelo en breakdown final
-
-## Resultado
-- Si Kling V2.1 falla → prueba Kling 2.6 → prueba Sora2 (automático)
-- Voz 15% más rápida y natural
-- El usuario nunca ve nombres de modelos — solo "Generando video…"
-- ~60-90s tiempo total sin cambios
+## Result
+- Zero-click flow from ingestion to blueprint (user only clicks "Analyze Video" once)
+- Videos generated with sales-specific UGC prompts optimized for TikTok Shop
+- Gemini generates a detailed shot plan that Sora/Kling follows for better output quality
 
