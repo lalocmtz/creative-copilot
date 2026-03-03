@@ -13,6 +13,7 @@ function json(body: unknown, status = 200) {
 }
 
 const KIE_BASE = "https://api.kie.ai/api/v1";
+const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 async function checkTask(taskId: string, apiKey: string) {
   const res = await fetch(`${KIE_BASE}/jobs/recordInfo?taskId=${taskId}`, {
@@ -73,66 +74,78 @@ Deno.serve(async (req) => {
       return json({ error: "No task data found. Use retry to reset this render.", status: "STUCK" }, 400);
     }
 
-    const lipsyncTaskId = breakdown._tasks.lipsync_task_id;
+    // ========== Timeout check ==========
+    const startedAt = breakdown._started_at;
+    if (startedAt) {
+      const elapsed = Date.now() - new Date(startedAt).getTime();
+      if (elapsed > TIMEOUT_MS) {
+        console.log(`[POLL] Timeout reached (${Math.round(elapsed / 1000)}s). Marking as FAILED.`);
+        await supabaseAdmin.from("renders").update({
+          status: "FAILED",
+          cost_breakdown_json: {
+            ...breakdown,
+            _progress: { step: "failed", detail: "Timeout: la generación tardó más de 5 minutos.", updated_at: new Date().toISOString() },
+          },
+        }).eq("id", render_id);
+        // NO credit deduction on timeout
+        return json({ status: "FAILED", step: "failed", detail: "Timeout: la generación tardó más de 5 minutos." });
+      }
+    }
+
+    const klingTaskId = breakdown._tasks.kling_task_id;
     const userId = breakdown._user_id;
     const assetId = breakdown._asset_id;
+    const ttsAudioUrl = breakdown._tts_audio_url;
 
-    if (!lipsyncTaskId) {
-      // Lip-sync not started yet — generate-final-video may still be running
-      return json({ status: "RENDERING", step: "starting_lipsync" });
+    if (!klingTaskId) {
+      // Kling task not started yet — generate-final-video may still be running
+      return json({ status: "RENDERING", step: "animating_image" });
     }
 
-    // ========== Check lip-sync task ==========
-    console.log(`[POLL] Checking lip-sync task: ${lipsyncTaskId}`);
-    const lipsyncStatus = await checkTask(lipsyncTaskId, KIE_API_KEY);
+    // ========== Check Kling I2V task ==========
+    console.log(`[POLL] Checking Kling I2V task: ${klingTaskId}`);
+    const klingStatus = await checkTask(klingTaskId, KIE_API_KEY);
 
-    if (lipsyncStatus.state === "fail") {
+    if (klingStatus.state === "fail") {
       await supabaseAdmin.from("renders").update({
         status: "FAILED",
-        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Lip-sync failed: ${lipsyncStatus.failMsg}` } },
+        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Kling I2V failed: ${klingStatus.failMsg}` } },
       }).eq("id", render_id);
-      return json({ status: "FAILED", step: "failed", detail: `Lip-sync: ${lipsyncStatus.failMsg}` });
+      return json({ status: "FAILED", step: "failed", detail: `Kling I2V: ${klingStatus.failMsg}` });
     }
 
-    if (lipsyncStatus.state !== "success") {
+    if (klingStatus.state !== "success") {
       await supabaseAdmin.from("renders").update({
         cost_breakdown_json: {
           ...breakdown,
-          _progress: { step: "generating_lipsync", detail: "Sincronizando labios + audio…", updated_at: new Date().toISOString() },
+          _progress: { step: "animating_image", detail: "Animando imagen…", updated_at: new Date().toISOString() },
         },
       }).eq("id", render_id);
-      return json({ status: "RENDERING", step: "generating_lipsync" });
+      return json({ status: "RENDERING", step: "animating_image" });
     }
 
     // ========== DONE! Download and finalize ==========
-    console.log("[POLL] Lip-sync complete! Finalizing...");
-    const videoFileUrl = lipsyncStatus.resultJson?.resultUrls?.[0] || lipsyncStatus.resultJson?.url;
-    if (!videoFileUrl) throw new Error("Lip-sync returned no video URL");
+    console.log("[POLL] Kling I2V complete! Finalizing...");
+    const videoFileUrl = klingStatus.resultJson?.resultUrls?.[0] || klingStatus.resultJson?.url;
+    if (!videoFileUrl) throw new Error("Kling I2V returned no video URL");
 
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         ...breakdown,
-        _progress: { step: "downloading", detail: "Descargando video final…", updated_at: new Date().toISOString() },
+        _progress: { step: "finalizing", detail: "Descargando y subiendo video…", updated_at: new Date().toISOString() },
       },
     }).eq("id", render_id);
 
     const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
     const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
-    const videoPath = `${userId}/${assetId}/renders/${render_id}/final_lipsync.mp4`;
-
-    await supabaseAdmin.from("renders").update({
-      cost_breakdown_json: {
-        ...breakdown,
-        _progress: { step: "uploading", detail: "Subiendo video final…", updated_at: new Date().toISOString() },
-      },
-    }).eq("id", render_id);
+    const videoPath = `${userId}/${assetId}/renders/${render_id}/final_video.mp4`;
 
     await supabaseAdmin.storage.from("ugc-assets").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
     const { data: videoSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(videoPath, 60 * 60 * 24 * 7);
 
     const ttsCost = 0.02;
-    const lipsyncCost = 0.13;
-    const totalCost = ttsCost + lipsyncCost;
+    const klingCost = 0.08;
+    const totalCost = ttsCost + klingCost;
 
     await supabaseAdmin.from("renders").update({
       status: "DONE",
@@ -140,8 +153,9 @@ Deno.serve(async (req) => {
       render_cost: totalCost,
       cost_breakdown_json: {
         tts: { provider: "elevenlabs", model: "eleven_multilingual_v2", estimated_usd: ttsCost },
-        lipsync: { provider: "infinitalk", model: "from-audio", estimated_usd: lipsyncCost },
+        kling_i2v: { provider: "kling", model: "v2.0/image2video", estimated_usd: klingCost },
         total_usd: totalCost,
+        _tts_audio_url: ttsAudioUrl,
       },
     }).eq("id", render_id);
 
@@ -150,7 +164,6 @@ Deno.serve(async (req) => {
     // ========== Credit deduction ==========
     if (userId) {
       console.log("[POLL] Deducting 1 credit for user:", userId);
-      // Fetch current credits
       const { data: creditData } = await supabaseAdmin
         .from("user_credits")
         .select("used_credits")
@@ -176,13 +189,13 @@ Deno.serve(async (req) => {
     if (breakdown._job_id) {
       await supabaseAdmin.from("jobs").update({
         status: "DONE",
-        cost_json: { tts: ttsCost, lipsync: lipsyncCost, total: totalCost },
-        provider_job_id: `lipsync:${lipsyncTaskId}`,
+        cost_json: { tts: ttsCost, kling_i2v: klingCost, total: totalCost },
+        provider_job_id: `kling:${klingTaskId}`,
       }).eq("id", breakdown._job_id);
     }
 
     console.log("[POLL] Pipeline complete!");
-    return json({ status: "DONE", video_url: videoSigned?.signedUrl, cost: totalCost });
+    return json({ status: "DONE", video_url: videoSigned?.signedUrl, tts_audio_url: ttsAudioUrl, cost: totalCost });
   } catch (err: any) {
     console.error("[POLL ERROR]", err.message);
     return json({ error: err.message }, 500);

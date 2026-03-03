@@ -8,16 +8,13 @@ interface ProgressInfo {
 }
 
 const STEPS = [
-  { key: "condensing_script", label: "Condensando guion a 10s…", pct: 5 },
-  { key: "generating_tts", label: "Generando voz (ElevenLabs)…", pct: 15 },
-  { key: "starting_lipsync", label: "Subiendo archivos para lip-sync…", pct: 30 },
-  { key: "generating_lipsync", label: "Sincronizando labios + audio (~2-4 min)…", pct: 55 },
-  { key: "downloading", label: "Descargando video final", pct: 85 },
-  { key: "uploading", label: "Subiendo video final", pct: 95 },
+  { key: "generating_tts", label: "Generando voz…", pct: 15 },
+  { key: "animating_image", label: "Animando imagen (~30-60s)…", pct: 50 },
+  { key: "finalizing", label: "Finalizando video…", pct: 90 },
 ];
 
 const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
-  const currentStep = progress?.step || "condensing_script";
+  const currentStep = progress?.step || "generating_tts";
   const currentIdx = STEPS.findIndex((s) => s.key === currentStep);
   const pct = currentIdx >= 0 ? STEPS[currentIdx].pct : 5;
 
@@ -58,7 +55,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
         })}
       </div>
       <p className="text-[10px] text-muted-foreground text-center">
-        Video con audio integrado y labios sincronizados
+        Video animado + voiceover sincronizado
       </p>
     </div>
   );

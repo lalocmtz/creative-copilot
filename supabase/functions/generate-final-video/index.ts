@@ -19,19 +19,16 @@ const ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 
 // ElevenLabs voice IDs — full catalog
 const VOICE_MAP: Record<string, string> = {
-  // Female
   sarah: "EXAVITQu4vr4xnSDxMaL",
   lily: "pFZP5JQG7iQjIQuC4Bku",
   jessica: "cgSgspJ2msm6clMCkdW9",
   laura: "FGY2WhTYpPnrIDTdsKH5",
   alice: "Xb7hH8MSUJpSbSDYk0k2",
-  // Male
   george: "JBFqnCBsd6RMkjVDRZzb",
   charlie: "IKne3meq5aSn9XLyUdCD",
   brian: "nPczCjzI2devNBz1zQrb",
   liam: "TX3LPaxmHKxFdv7VOQHJ",
   eric: "cjVigY5qzO86Huf0OWal",
-  // Legacy IDs (backward compat)
   v1: "EXAVITQu4vr4xnSDxMaL",
   v2: "JBFqnCBsd6RMkjVDRZzb",
   v3: "pFZP5JQG7iQjIQuC4Bku",
@@ -128,7 +125,7 @@ Deno.serve(async (req) => {
     await supabaseAdmin.from("renders").update({ status: "RENDERING" }).eq("id", render_id);
 
     // Idempotency check
-    const idempotencyKey = `final_video_lipsync:${render_id}`;
+    const idempotencyKey = `final_video_kling:${render_id}`;
     const { data: existingJob } = await supabaseAdmin.from("jobs").select("*").eq("idempotency_key", idempotencyKey).eq("status", "DONE").maybeSingle();
     if (existingJob) return json({ message: "Already completed", job: existingJob });
 
@@ -144,6 +141,7 @@ Deno.serve(async (req) => {
         _tasks: {},
         _progress: { step: "condensing_script", detail: "Condensando guion a 10s…", updated_at: new Date().toISOString() },
         _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _started_at: new Date().toISOString(),
       },
     }).eq("id", render_id);
 
@@ -163,6 +161,7 @@ Deno.serve(async (req) => {
         _tasks: { condensed_script: condensedScript },
         _progress: { step: "generating_tts", detail: "Generando voz con ElevenLabs…", updated_at: new Date().toISOString() },
         _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _started_at: new Date().toISOString(),
       },
     }).eq("id", render_id);
 
@@ -198,31 +197,21 @@ Deno.serve(async (req) => {
     // Upload audio to Supabase Storage
     const audioPath = `${userId}/${assetId}/renders/${render_id}/tts_audio.mp3`;
     await supabaseAdmin.storage.from("ugc-assets").upload(audioPath, audioBuffer, { contentType: "audio/mpeg", upsert: true });
-    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 2); // 2h expiry
+    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 24 * 7); // 7 days
     const ttsAudioUrl = audioSigned?.signedUrl;
     if (!ttsAudioUrl) throw new Error("Failed to get signed URL for TTS audio");
     console.log(`[KICKOFF] TTS audio uploaded to storage`);
 
-    // === STEP 2: Upload files to KIE and start lip-sync ===
+    // === STEP 2: Upload base image to KIE and start Kling I2V ===
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         _tasks: { condensed_script: condensedScript },
-        _progress: { step: "starting_lipsync", detail: "Preparando lip-sync…", updated_at: new Date().toISOString() },
-        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText, _tts_audio_url: ttsAudioUrl,
+        _progress: { step: "animating_image", detail: "Animando imagen (~30-60s)…", updated_at: new Date().toISOString() },
+        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _tts_audio_url: ttsAudioUrl,
+        _started_at: new Date().toISOString(),
       },
     }).eq("id", render_id);
-
-    // Upload TTS audio to KIE
-    const audioFileName = `tts_${render_id}.mp3`;
-    const uploadAudioRes = await fetch(KIE_FILE_UPLOAD, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUrl: ttsAudioUrl, uploadPath: audioFileName }),
-    });
-    const uploadAudioData = await uploadAudioRes.json();
-    const kieAudioUrl = uploadAudioData?.data?.downloadUrl || uploadAudioData?.data?.url;
-    if (!kieAudioUrl) throw new Error(`Audio upload to KIE failed: ${JSON.stringify(uploadAudioData)}`);
-    console.log("[KICKOFF] TTS audio uploaded to KIE:", kieAudioUrl);
 
     // Upload base image to KIE
     const imageFileName = `base_${render_id}.jpg`;
@@ -236,36 +225,46 @@ Deno.serve(async (req) => {
     if (!kieImageUrl) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
     console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
 
-    // Start InfiniteTalk lip-sync
-    const lipsyncPrompt = "Natural head movement, subtle expressions matching speech tone, gentle eye movement, realistic lip sync.";
-    const lipsyncRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
+    // Build dynamic prompt from scenario + emotional intensity
+    const emotionalIntensity = render.emotional_intensity ?? 50;
+    const scenarioExcerpt = render.scenario_prompt ? render.scenario_prompt.substring(0, 200) : "";
+    const movementLevel = emotionalIntensity > 70 ? "moderate expressive movement, animated gestures" : "subtle natural movement, gentle gestures";
+    const i2vPrompt = `${movementLevel}, person moving and gesturing as if speaking to camera. UGC style, handheld camera feel, 9:16 vertical format. ${scenarioExcerpt}`.trim();
+
+    console.log(`[KICKOFF] Kling I2V prompt: ${i2vPrompt.substring(0, 120)}...`);
+
+    // Start Kling Image-to-Video
+    const klingRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "infinitalk/from-audio",
+        model: "kling/v2.0/image2video",
         input: {
           image_url: kieImageUrl,
-          audio_url: kieAudioUrl,
-          prompt: lipsyncPrompt,
-          resolution: "720p",
+          prompt: i2vPrompt,
+          negative_prompt: "logos, text, watermark, famous faces, distorted faces, extra limbs",
+          duration: "10",
+          aspect_ratio: "9:16",
         },
       }),
     });
-    const lipsyncData = await lipsyncRes.json();
-    if (lipsyncData.code !== 200) throw new Error(`Lip-sync task failed: ${lipsyncData.msg}`);
-    const lipsyncTaskId = lipsyncData.data.taskId;
-    console.log(`[KICKOFF] Lip-sync task started: ${lipsyncTaskId}`);
+    const klingData = await klingRes.json();
+    if (klingData.code !== 200) throw new Error(`Kling I2V task failed: ${klingData.msg || JSON.stringify(klingData)}`);
+    const klingTaskId = klingData.data.taskId;
+    console.log(`[KICKOFF] Kling I2V task started: ${klingTaskId}`);
 
-    // Save lip-sync task ID for polling
+    // Save Kling task ID for polling
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
-        _tasks: { lipsync_task_id: lipsyncTaskId, condensed_script: condensedScript },
-        _progress: { step: "generating_lipsync", detail: "Sincronizando labios + audio (~2-4 min)…", updated_at: new Date().toISOString() },
-        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText, _tts_audio_url: ttsAudioUrl,
+        _tasks: { kling_task_id: klingTaskId, condensed_script: condensedScript },
+        _progress: { step: "animating_image", detail: "Animando imagen (~30-60s)…", updated_at: new Date().toISOString() },
+        _job_id: job?.id, _image_url: baseImageUrl, _user_id: userId, _asset_id: assetId, _script: scriptText,
+        _tts_audio_url: ttsAudioUrl,
+        _started_at: new Date().toISOString(),
       },
     }).eq("id", render_id);
 
-    return json({ started: true, lipsync_task_id: lipsyncTaskId, condensed_script: condensedScript });
+    return json({ started: true, kling_task_id: klingTaskId, condensed_script: condensedScript });
   } catch (err: any) {
     console.error("[ERROR]", err.message);
     try {
