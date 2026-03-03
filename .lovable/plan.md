@@ -1,82 +1,36 @@
 
 
-# Plan: Video con Audio Integrado + Script Condensado a 10s
+# Plan: Fix Image Prompt to Avoid Cloning Person/Environment
 
-## Problema
-1. El video se entrega **sin audio** — el TTS viene como archivo separado, no sirve así
-2. El guion original es largo (>10s de lectura) pero el video dura 10s — necesita condensarse
+## Problem
+The current prompt tells the AI to "Copy the background type" and "Match the exact framing from IMAGE 1" — this causes it to literally clone the person's face, room, furniture, and even small details like the trash can. This is a plagiarism risk.
 
-## Solución: InfiniteTalk (lip-sync) + Script Condensación con AI
+## What Needs to Change
+Only the prompt text in `supabase/functions/generate-base-image/index.ts` (lines 102-165). No UI or hook changes.
 
-### Nuevo pipeline:
-```text
-Imagen aprobada + Guion
-    ↓
-[Paso 0] Condensar guion a ~25-30 palabras (10s) via Gemini/Lovable AI
-    ↓
-[Paso 1] TTS: Guion condensado → ElevenLabs (vía KIE) → audio.mp3
-    ↓
-[Paso 2] Lip-Sync: Imagen base + audio TTS → InfiniteTalk (vía KIE)
-         → Video con audio YA integrado + labios sincronizados
-    ↓
-[Poll] Verificar TTS → luego lip-sync → descargar video final
-    ↓
-[DONE] Un solo archivo MP4 con audio integrado
-```
+## Key Prompt Adjustments
 
-**Ventaja clave**: InfiniteTalk (`infinitalk/from-audio` en KIE) toma imagen + audio y produce un video con lip-sync donde el audio ya está baked in. Elimina el problema de audio separado Y mejora el realismo (labios se mueven con el habla).
+### 1. System Prompt — Add anti-cloning rule
+Add to ABSOLUTE RULES:
+- "NEVER replicate the reference person's face. Generate a COMPLETELY DIFFERENT person with only similar demographic traits (age range, gender, build, facial hair style)."
+- "NEVER copy the exact room/background. Create a DIFFERENT environment of the same general type."
 
-No se necesita nueva API — KIE ya tiene InfiniteTalk disponible con la misma API key.
+### 2. Image Labeling — Change IMAGE 1 instructions
+Currently says: "Copy the camera angle, distance, framing, **background type**, and lighting direction"
 
-## Cambios
+Change to: "Use as **inspiration only** for camera angle and distance. Do NOT copy the room, furniture, wall colors, or any identifiable background elements. Create a completely different environment of the same general type (indoor/outdoor)."
 
-### 1. `supabase/functions/generate-final-video/index.ts` — Reestructurar pipeline
+### 3. User Prompt — PERSON section
+Currently: "New person (different identity from reference)"
 
-**Paso 0 nuevo — Condensar script:**
-- Antes de TTS, llamar a Lovable AI (Gemini) para condensar el guion a ~25-30 palabras
-- Prompt: "Condensa este guion UGC a exactamente 10 segundos de lectura (~25-30 palabras). Mantén el hook, la propuesta de valor y el CTA. Mismo tono y energía. Solo devuelve el guion condensado, nada más."
-- Guardar script condensado en `_tasks.condensed_script`
+Change to: "A COMPLETELY DIFFERENT person — different face, different hair, different skin tone variation. Only preserve broad traits: same gender, similar age range, similar build, similar facial hair style (if any). The person must NOT be recognizable as the same individual."
 
-**Paso 1 — TTS (sin cambios mayores):**
-- Usar el script condensado en vez del original
-- Sigue usando ElevenLabs vía KIE
+### 4. User Prompt — COMPOSITION section  
+Currently: "Match the exact camera distance, angle, background type, and framing from IMAGE 1"
 
-**Paso 2 — Reemplazar image-to-video con InfiniteTalk:**
-- Eliminar la llamada a `kling-2.6/image-to-video`
-- Nuevo: esperar a que TTS termine (polling dentro del kickoff o en poll-render-status)
-- Subir audio TTS a KIE file upload
-- Llamar a `infinitalk/from-audio` con: `image_url` (imagen base), `audio_url` (TTS), `prompt` (descripción de movimiento), `resolution: "720p"`
-- Guardar `lipsync_task_id` en `_tasks`
+Change to: "Similar camera distance and framing style as IMAGE 1, but in a DIFFERENT room/location. Change wall color, furniture, floor, decorations. Keep the same general vibe (e.g., casual indoor) but make the space clearly distinct."
 
-### 2. `supabase/functions/poll-render-status/index.ts` — Simplificar a 2 pasos secuenciales
-
-**Nuevo flujo de polling:**
-1. Verificar TTS task → cuando esté listo, si no hay `lipsync_task_id` aún, iniciar InfiniteTalk (subir audio + crear task)
-2. Verificar lip-sync task → cuando esté listo, descargar video final (ya tiene audio integrado)
-3. Guardar un solo archivo MP4 como `final_video_url` — sin `tts_audio_url` separado
-
-**Eliminar:**
-- La descarga y upload separado de audio TTS
-- El campo `tts_audio_url` en el resultado final
-
-### 3. `src/pages/Studio.tsx` — Simplificar UI de resultado
-
-- Eliminar la sección de "Audio Generado (TTS)" separado (líneas 542-552)
-- El video ya tiene audio integrado, solo mostrar el player de video
-- Actualizar costo a "~$0.15" (TTS $0.02 + lip-sync ~$0.13)
-- Actualizar descripción: "video 10s con voz sincronizada"
-
-### 4. `src/components/RenderProgressPanel.tsx` — Actualizar pasos
-
-- Cambiar paso "generating_video" → "generating_lipsync" con label "Sincronizando labios + audio…"
-- Agregar paso "condensing_script" al inicio con label "Condensando guion a 10s…"
-
-### 5. `src/hooks/useRender.ts` — Sin cambios funcionales
-- El hook ya envía `{ render_id, script }` correctamente
-
----
-
-**Costo estimado por render:** ~$0.15 (TTS $0.02 + InfiniteTalk lip-sync ~$0.13)
-
-**Resultado:** Un solo archivo MP4 descargable con audio integrado, labios sincronizados, y guion condensado a 10 segundos.
+### 5. FORBIDDEN section — Add
+- "Copying the reference person's face or distinctive features"
+- "Replicating the exact room, furniture placement, or background details from the reference"
 
