@@ -345,17 +345,17 @@ if (existingJob) {
 ## Phase 3 — Blueprint (LLM Analysis)
 
 ### 3.1 Edge Function: `generate-blueprint`
-- [ ] Create `supabase/functions/generate-blueprint/index.ts`
-- [ ] Accept `{ asset_id, force?: boolean }`
-- [ ] Validate `asset.status >= 'VIDEO_INGESTED'`
-- [ ] If blueprint exists AND `force !== true` → return 409
-- [ ] If `force === true` → require UI confirmation (handled client-side), delete old blueprint
-- [ ] Build Gemini prompt with transcript + visual description
-- [ ] Call Gemini API → parse strict JSON response
-- [ ] Validate response schema (hook, ángulo, emoción, mecanismo, beats, 3 variaciones ≤55 words each, riesgos_politica, sugerencia_mejora_retencion)
-- [ ] Save to `blueprints` table (analysis_json, variations_json, token_cost)
-- [ ] Update `assets.status = 'BLUEPRINT_GENERATED'`
-- [ ] Create job record with cost tracking
+- [x] Create `supabase/functions/generate-blueprint/index.ts`
+- [x] Accept `{ asset_id, force?: boolean }`
+- [x] Validate `asset.status >= 'VIDEO_INGESTED'`
+- [x] If blueprint exists AND `force !== true` → return 409
+- [x] If `force === true` → require UI confirmation (handled client-side), delete old blueprint
+- [x] Build Gemini prompt with transcript + visual description
+- [x] Call Lovable AI (Gemini) → parse strict JSON via tool calling
+- [x] Validate response schema (hook, ángulo, emoción, mecanismo, beats, 3 variaciones, riesgos_politica, sugerencia_mejora_retencion)
+- [x] Save to `blueprints` table (analysis_json, variations_json, token_cost)
+- [x] Update `assets.status = 'BLUEPRINT_GENERATED'`
+- [x] Create job record with cost tracking
 
 #### Secrets Needed
 - `GEMINI_API_KEY` — for strategic analysis
@@ -390,14 +390,14 @@ interface BlueprintVariation {
 ---
 
 ### 3.2 Frontend: Blueprint Page (wire to real backend)
-- [ ] Load asset + blueprint from Supabase on mount
-- [ ] Show transcript in read-only viewer (`TranscriptViewer`)
-- [ ] "Generate Blueprint" button → calls `generate-blueprint` edge function
-- [ ] Show loading state with cost estimate before execution
-- [ ] On success: render `BlueprintViewer` with tabs (Análisis / Variaciones / Riesgos)
-- [ ] Show `token_cost` in `CostDisplay`
-- [ ] "Regenerate" button → confirm modal with cost estimate → calls with `force=true`
-- [ ] Link to Studio: "Continuar al Studio →"
+- [x] Load asset + blueprint from Supabase on mount
+- [x] Show transcript in read-only viewer
+- [x] "Generate Blueprint" button → calls `generate-blueprint` edge function
+- [x] Show loading state with cost estimate before execution
+- [x] On success: render analysis, variations, risks, beats
+- [x] Show `token_cost` in `CostDisplay`
+- [x] "Regenerate" button → calls with `force=true`
+- [x] Link to Studio: "Abrir Studio →"
 
 > **Ref**: [design-guidelines.md](./design-guidelines.md) — Confirm modal for re-generation, cost display before execution
 

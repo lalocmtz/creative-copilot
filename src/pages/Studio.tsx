@@ -9,26 +9,27 @@ import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
 import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useAsset } from "@/hooks/useSupabaseQueries";
+import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
 import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage } from "@/hooks/useRender";
 import { useAuth } from "@/contexts/AuthContext";
 
 const actors = [
-  { id: "a1", name: "Sofia M.", style: "Natural, cercana" },
-  { id: "a2", name: "Carlos R.", style: "Energético, joven" },
-  { id: "a3", name: "Valentina L.", style: "Profesional, elegante" },
+  { id: "a1", name: "Sofia M.", style: "Natural, cercana", gender: "femenino" },
+  { id: "a2", name: "Carlos R.", style: "Energético, joven", gender: "masculino" },
+  { id: "a3", name: "Valentina L.", style: "Profesional, elegante", gender: "femenino" },
 ];
 
 const voices = [
-  { id: "v1", name: "Sarah", style: "Femenina, cálida" },
-  { id: "v2", name: "George", style: "Masculino, confiable" },
-  { id: "v3", name: "Lily", style: "Femenina, energética" },
+  { id: "v1", name: "Sarah", style: "Femenina, cálida", gender: "femenino" },
+  { id: "v2", name: "George", style: "Masculino, confiable", gender: "masculino" },
+  { id: "v3", name: "Lily", style: "Femenina, energética", gender: "femenino" },
 ];
 
 const Studio = () => {
   const { id: assetId } = useParams<{ id: string }>();
   const { user } = useAuth();
   const { data: asset, isLoading: assetLoading } = useAsset(assetId);
+  const { data: blueprint, isLoading: bpLoading } = useBlueprint(assetId);
   const { data: render, isLoading: renderLoading } = useRender(assetId);
   const createDraft = useCreateRenderDraft();
   const updateRender = useUpdateRender();
@@ -41,7 +42,39 @@ const Studio = () => {
   const [voice, setVoice] = useState("v1");
   const [intensity, setIntensity] = useState([50]);
   const [scenario, setScenario] = useState("");
-  const [initialized, setInitialized] = useState(false);
+  const [populated, setPopulated] = useState(false);
+
+  // Auto-populate from blueprint data
+  useEffect(() => {
+    if (populated || !blueprint) return;
+
+    const analysis = blueprint.analysis_json as any;
+    const variations = blueprint.variations_json as any[];
+
+    // Script: use Nivel 1 (exact clone)
+    const nivel1 = variations?.find((v: any) => v.nivel === 1);
+    if (nivel1?.guion) setScript(nivel1.guion);
+
+    // Gender-based actor/voice selection
+    const gender = analysis?.genero_detectado;
+    if (gender === "masculino") {
+      setActor("a2");
+      setVoice("v2");
+    } else {
+      setActor("a1");
+      setVoice("v1");
+    }
+
+    // Scenario from blueprint
+    if (analysis?.escenario_sugerido) setScenario(analysis.escenario_sugerido);
+
+    // Emotional intensity
+    if (analysis?.intensidad_emocional != null) {
+      setIntensity([analysis.intensidad_emocional]);
+    }
+
+    setPopulated(true);
+  }, [blueprint, populated]);
 
   // Auto-create draft render if none exists
   useEffect(() => {
@@ -51,16 +84,15 @@ const Studio = () => {
     }
   }, [assetId, asset, render, renderLoading]);
 
-  // Sync local state from render record
+  // Sync local state from existing render record (if no blueprint population happened)
   useEffect(() => {
-    if (!render || initialized) return;
+    if (populated || !render) return;
     setLevel(String(render.variation_level ?? 2));
     setActor(render.actor_id ?? "a1");
     setVoice(render.voice_id ?? "v1");
     setIntensity([render.emotional_intensity ?? 50]);
     setScenario(render.scenario_prompt ?? "");
-    setInitialized(true);
-  }, [render, initialized]);
+  }, [render, populated]);
 
   const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
   const estDuration = Math.round((wordCount / 160) * 60);
@@ -84,7 +116,6 @@ const Studio = () => {
 
   const handleGenerateImage = () => {
     if (!render) return;
-    // Save draft first, then generate
     handleSaveDraft();
     generateImage.mutate(render.id);
   };
@@ -94,7 +125,16 @@ const Studio = () => {
     approveImage.mutate({ renderId: render.id, assetId });
   };
 
-  if (assetLoading || renderLoading) {
+  // Handle variation level change — update script from blueprint
+  const handleLevelChange = (newLevel: string) => {
+    setLevel(newLevel);
+    if (!blueprint) return;
+    const variations = blueprint.variations_json as any[];
+    const match = variations?.find((v: any) => v.nivel === parseInt(newLevel));
+    if (match?.guion) setScript(match.guion);
+  };
+
+  if (assetLoading || renderLoading || bpLoading) {
     return (
       <div className="p-8 flex items-center justify-center min-h-[50vh]">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -139,7 +179,7 @@ const Studio = () => {
                 <Film className="w-4 h-4 text-primary" />
                 Guion
               </h3>
-              <Select value={level} onValueChange={setLevel}>
+              <Select value={level} onValueChange={handleLevelChange}>
                 <SelectTrigger className="w-[120px] h-8 text-xs">
                   <SelectValue />
                 </SelectTrigger>
@@ -265,12 +305,12 @@ const Studio = () => {
                 value={scenario}
                 onChange={(e) => setScenario(e.target.value)}
                 placeholder="Ej: Baño moderno con luz natural suave"
-                className="min-h-[70px] text-sm bg-muted/30 border-border resize-none"
+                className="min-h-[100px] text-sm bg-muted/30 border-border resize-none"
               />
             </div>
 
             <div>
-              <label className="text-xs text-muted-foreground mb-1.5 block">Producto</label>
+              <label className="text-xs text-muted-foreground mb-1.5 block">Producto (opcional)</label>
               <div className="border-2 border-dashed border-border rounded-lg p-6 flex flex-col items-center gap-2 hover:border-primary/50 transition-colors cursor-pointer">
                 <Upload className="w-5 h-5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Arrastrá o seleccioná imagen</span>

@@ -1,17 +1,17 @@
-import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import PipelineStepper from "@/components/PipelineStepper";
 import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
-import { ArrowRight, Brain, Loader2, AlertTriangle } from "lucide-react";
+import { ArrowRight, Brain, Loader2, AlertTriangle, Wand2, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
-import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
+import { useAsset, useBlueprint, useGenerateBlueprint } from "@/hooks/useSupabaseQueries";
 
 const Blueprint = () => {
   const { id } = useParams<{ id: string }>();
   const { data: asset, isLoading: assetLoading } = useAsset(id);
   const { data: blueprint, isLoading: bpLoading } = useBlueprint(id);
+  const generateBlueprint = useGenerateBlueprint();
 
   if (assetLoading || bpLoading) {
     return (
@@ -25,13 +25,18 @@ const Blueprint = () => {
     return <div className="p-8 text-center text-muted-foreground">Asset no encontrado.</div>;
   }
 
-  // Parse blueprint JSON or use fallback
   const analysis = (blueprint?.analysis_json as any) || {};
   const variations = (blueprint?.variations_json as any[]) || [];
   const transcript = asset.transcript || "Sin transcript disponible.";
-
   const beats = analysis.estructura_beats || [];
   const risks = analysis.riesgos_politica || [];
+
+  const handleGenerate = (force = false) => {
+    if (!id) return;
+    generateBlueprint.mutate({ assetId: id, force });
+  };
+
+  const canGenerate = asset.status === "VIDEO_INGESTED" || asset.status === "BLUEPRINT_GENERATED" || asset.status === "IMAGE_APPROVED" || asset.status === "VIDEO_RENDERED";
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
@@ -46,7 +51,7 @@ const Blueprint = () => {
         <PipelineStepper
           steps={[
             { label: "Ingesta", status: "done", cost: "$0.30" },
-            { label: "Blueprint", status: blueprint ? "done" : "pending", cost: blueprint ? `$${blueprint.token_cost?.toFixed(2) ?? '0.00'}` : undefined },
+            { label: "Blueprint", status: blueprint ? "done" : "active", cost: blueprint ? `$${blueprint.token_cost?.toFixed(2) ?? '0.00'}` : undefined },
             { label: "Studio", status: "pending" },
             { label: "Render", status: "pending" },
           ]}
@@ -70,7 +75,7 @@ const Blueprint = () => {
               <div className="space-y-2">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Tokens entrada</span>
-                  <span className="font-mono text-foreground">~{Math.round((transcript.length / 4))} tokens</span>
+                  <span className="font-mono text-foreground">~{Math.round(transcript.length / 4)} tokens</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Tokens salida</span>
@@ -91,17 +96,30 @@ const Blueprint = () => {
             <>
               {/* Core analysis */}
               <div className="rounded-xl border border-border gradient-card p-5 space-y-4">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Brain className="w-4 h-4 text-primary" />
-                  Análisis Estratégico
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <Brain className="w-4 h-4 text-primary" />
+                    Análisis Estratégico
+                  </h3>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() => handleGenerate(true)}
+                    disabled={generateBlueprint.isPending}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${generateBlueprint.isPending ? 'animate-spin' : ''}`} />
+                    Regenerar
+                  </Button>
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { label: "Hook", value: analysis.hook },
-                    { label: "Tipo de Hook", value: analysis.hook_type || analysis.tipo_hook },
+                    { label: "Tipo de Hook", value: analysis.hook_type },
                     { label: "Ángulo", value: analysis.angulo },
-                    { label: "Emoción", value: analysis.emocion_dominante || analysis.emocion },
+                    { label: "Emoción", value: analysis.emocion_dominante },
                     { label: "Mecanismo", value: analysis.mecanismo },
+                    { label: "Género Detectado", value: analysis.genero_detectado },
                   ].filter(item => item.value).map((item) => (
                     <div key={item.label} className="bg-muted/30 rounded-lg p-3">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{item.label}</p>
@@ -109,6 +127,12 @@ const Blueprint = () => {
                     </div>
                   ))}
                 </div>
+                {analysis.escenario_sugerido && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Escenario Sugerido</p>
+                    <p className="text-xs text-foreground leading-relaxed">{analysis.escenario_sugerido}</p>
+                  </div>
+                )}
               </div>
 
               {/* Beats */}
@@ -145,34 +169,73 @@ const Blueprint = () => {
               {/* Variations */}
               {variations.length > 0 && (
                 <div className="rounded-xl border border-border gradient-card p-5">
-                  <h3 className="text-sm font-semibold text-foreground mb-3">Variaciones Sugeridas</h3>
-                  <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Variaciones</h3>
+                  <div className="space-y-3">
                     {variations.map((v: any, i: number) => (
-                      <div key={i} className="flex items-center justify-between bg-muted/30 rounded-lg p-3">
-                        <div className="flex items-center gap-3">
+                      <div key={i} className="bg-muted/30 rounded-lg p-3 space-y-1">
+                        <div className="flex items-center gap-2">
                           <span className="w-7 h-7 rounded-md bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">
                             N{v.nivel || i + 1}
                           </span>
-                          <span className="text-xs text-foreground">{v.descripcion}</span>
+                          <span className="text-xs font-semibold text-foreground">{v.titulo}</span>
+                          <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+                            {v.guion?.split(/\s+/).length || 0} palabras
+                          </span>
                         </div>
-                        {v.palabras && <span className="text-[10px] text-muted-foreground font-mono">{v.palabras} palabras</span>}
+                        <p className="text-xs text-muted-foreground pl-9 leading-relaxed">"{v.guion}"</p>
+                        {v.cambios_clave?.length > 0 && (
+                          <div className="pl-9 flex flex-wrap gap-1 mt-1">
+                            {v.cambios_clave.map((c: string, ci: number) => (
+                              <span key={ci} className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full">{c}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
+
+              {analysis.sugerencia_mejora_retencion && (
+                <div className="rounded-xl border border-border gradient-card p-5">
+                  <h3 className="text-sm font-semibold text-foreground mb-2">💡 Sugerencia de Mejora</h3>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{analysis.sugerencia_mejora_retencion}</p>
+                </div>
+              )}
             </>
           ) : (
-            <div className="rounded-xl border border-border gradient-card p-8 text-center">
-              <Brain className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-sm text-foreground font-medium">Blueprint no generado aún</p>
-              <p className="text-xs text-muted-foreground mt-1">Genera el blueprint para analizar la estructura del video.</p>
+            <div className="rounded-xl border border-border gradient-card p-8 text-center space-y-4">
+              <Brain className="w-10 h-10 text-muted-foreground mx-auto" />
+              <div>
+                <p className="text-sm text-foreground font-medium">Blueprint no generado aún</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  El AI analizará el transcript y generará la estructura estratégica, guion clonado, escenario y variaciones.
+                </p>
+              </div>
+              <CostDisplay amount="~$0.02" label="análisis con Gemini" size="sm" />
+              <Button
+                onClick={() => handleGenerate(false)}
+                disabled={generateBlueprint.isPending || !canGenerate}
+                className="gap-2"
+              >
+                {generateBlueprint.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Analizando…
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4" />
+                    Generar Blueprint
+                  </>
+                )}
+              </Button>
             </div>
           )}
 
           <div className="flex justify-end">
             <Link to={`/asset/${id}/studio`}>
-              <Button className="gap-2">
+              <Button className="gap-2" disabled={!blueprint}>
                 Abrir Studio
                 <ArrowRight className="w-4 h-4" />
               </Button>
