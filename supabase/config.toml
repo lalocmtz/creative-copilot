@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.ingest-asset]
 verify_jwt = false
+
+[functions.generate-blueprint]
+verify_jwt = false
