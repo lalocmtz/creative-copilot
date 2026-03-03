@@ -134,14 +134,14 @@ Deno.serve(async (req) => {
     const sourceVideoPath = breakdown._source_video_path || `${userId}/${assetId}/source.mp4`;
     const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(sourceVideoPath, 60 * 60 * 24 * 7);
 
-    const totalCost = 0.90; // ~$0.045/s × 20s at 1080p
+    const totalCost = 0.45; // ~$0.023/s × 20s at 720p (económico)
 
     await supabaseAdmin.from("renders").update({
       status: "DONE",
       final_video_url: videoSigned?.signedUrl || videoFileUrl,
       render_cost: totalCost,
       cost_breakdown_json: {
-        motion_transfer: { provider: "kling", model: "2.6-motion-control", mode: "1080p", estimated_usd: totalCost },
+        motion_transfer: { provider: "kling", model: "2.6-motion-control", mode: "720p", estimated_usd: totalCost },
         audio_url: audioSigned?.signedUrl,
         total_usd: totalCost,
       },

@@ -116,14 +116,9 @@ Deno.serve(async (req) => {
       input_urls: [kieImageUrl],
       video_urls: [kieVideoUrl],
       character_orientation: "video",
-      mode: "1080p",
+      mode: "720p",
       prompt: motionPrompt,
     };
-    // Try passing duration to cap at 30s (API may accept it)
-    if (durationCapped) {
-      motionInput.duration = effectiveDuration;
-      motionInput.end_time = effectiveDuration;
-    }
 
     const motionRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",

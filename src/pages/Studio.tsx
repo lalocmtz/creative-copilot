@@ -528,7 +528,7 @@ const Studio = () => {
                         <p className="text-[10px] text-muted-foreground">Audio del video original (reproducir junto al video)</p>
                       </div>
                     )}
-                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.90"}`} label="costo motion transfer" size="sm" />
+                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.45"}`} label="costo motion transfer (720p)" size="sm" />
                     <div className="flex gap-2">
                       <a
                         href={render.final_video_url}
@@ -551,7 +551,7 @@ const Studio = () => {
                       const sourceDur = typeof dur === "number" ? dur : null;
                       const capped = sourceDur && sourceDur > 30;
                       const effectiveDur = capped ? 30 : (sourceDur || 30);
-                      const estCost = (effectiveDur / 30 * 0.90).toFixed(2);
+                      const estCost = (effectiveDur / 30 * 0.45).toFixed(2);
                       return (
                         <>
                           {capped && (
@@ -560,7 +560,7 @@ const Studio = () => {
                               <span>El video original dura {Math.round(sourceDur)}s. Se procesarán los primeros 30s.</span>
                             </div>
                           )}
-                          <CostDisplay amount={`~$${estCost}`} label={`motion transfer (${effectiveDur}s, 1080p)`} size="md" />
+                          <CostDisplay amount={`~$${estCost}`} label={`motion transfer (${effectiveDur}s, 720p)`} size="md" />
                         </>
                       );
                     })()}

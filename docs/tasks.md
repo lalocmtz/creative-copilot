@@ -476,3 +476,10 @@ After completing all above:
 - [ ] Costs endpoint aggregating per stage
 - [ ] Cost audit panel in UI
 - [ ] Per-asset cost history
+
+### Phase 10 — Upgrade a 1080p
+- [ ] Cambiar `mode: "720p"` → `"1080p"` en `generate-final-video`
+- [ ] Actualizar costos en `poll-render-status` (~$0.045/s → ~$0.90 para 20s)
+- [ ] Actualizar estimados de costo en Studio UI
+- [ ] Verificar calidad de output 1080p vs 720p con tests A/B
+- [ ] Documentar impacto en costos para usuarios
