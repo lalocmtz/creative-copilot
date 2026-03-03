@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
     if (renderErr || !render) return json({ error: "Render not found" }, 404);
     if ((render as any).assets.user_id !== userId) return json({ error: "Unauthorized" }, 403);
-    if (render.status !== "DRAFT" && render.status !== "IMAGE_GENERATED") {
+    if (render.status !== "DRAFT" && render.status !== "IMAGE_GENERATED" && render.status !== "FAILED") {
       return json({ error: `Cannot generate image: render status is ${render.status}` }, 400);
     }
 
