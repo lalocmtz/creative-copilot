@@ -1,43 +1,139 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import PipelineStepper, { StepStatus } from "@/components/PipelineStepper";
 import CostDisplay from "@/components/CostDisplay";
-import { ArrowRight, Loader2, Shield } from "lucide-react";
+import { ArrowRight, Loader2, Shield, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+
+type IngestPhase = "idle" | "creating" | "downloading" | "transcribing" | "done" | "error";
 
 const Ingest = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [url, setUrl] = useState("");
   const [rights, setRights] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [done, setDone] = useState(false);
+  const [phase, setPhase] = useState<IngestPhase>("idle");
+  const [assetId, setAssetId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [costs, setCosts] = useState<{ download?: string; transcribe?: string }>({});
 
-  const steps: { label: string; status: StepStatus; cost?: string }[] = analyzing || done
-    ? [
-        { label: "Descarga", status: done ? "done" : "done", cost: "$0.05" },
-        { label: "Transcripción", status: done ? "done" : "active", cost: done ? "$0.25" : "~$0.25" },
-        { label: "Listo", status: done ? "done" : "pending" },
-      ]
-    : [
-        { label: "Descarga", status: "pending" },
-        { label: "Transcripción", status: "pending" },
-        { label: "Listo", status: "pending" },
-      ];
+  const isProcessing = phase === "creating" || phase === "downloading" || phase === "transcribing";
 
-  const logMessages = [
-    "Conectando con TikTok…",
-    "Video descargado (18s, 1080×1920)",
-    "Extrayendo audio…",
-    "Transcribiendo con Whisper… esto toma ~15s",
-  ];
+  const addLog = (msg: string) => setLogs((prev) => [...prev, msg]);
 
-  const handleAnalyze = () => {
-    setAnalyzing(true);
-    setTimeout(() => {
-      setDone(true);
-      setAnalyzing(false);
-    }, 3000);
+  const steps: { label: string; status: StepStatus; cost?: string }[] = (() => {
+    switch (phase) {
+      case "idle":
+        return [
+          { label: "Descarga", status: "pending" },
+          { label: "Transcripción", status: "pending" },
+          { label: "Listo", status: "pending" },
+        ];
+      case "creating":
+        return [
+          { label: "Creando asset", status: "active" },
+          { label: "Descarga", status: "pending" },
+          { label: "Transcripción", status: "pending" },
+        ];
+      case "downloading":
+        return [
+          { label: "Descarga", status: "active" },
+          { label: "Transcripción", status: "pending" },
+          { label: "Listo", status: "pending" },
+        ];
+      case "transcribing":
+        return [
+          { label: "Descarga", status: "done", cost: costs.download },
+          { label: "Transcripción", status: "active", cost: "~$0.25" },
+          { label: "Listo", status: "pending" },
+        ];
+      case "done":
+        return [
+          { label: "Descarga", status: "done", cost: costs.download },
+          { label: "Transcripción", status: "done", cost: costs.transcribe },
+          { label: "Listo", status: "done" },
+        ];
+      case "error":
+        return [
+          { label: "Descarga", status: phase === "error" ? "failed" : "done" },
+          { label: "Transcripción", status: "pending" },
+          { label: "Listo", status: "pending" },
+        ];
+      default:
+        return [];
+    }
+  })();
+
+  const handleAnalyze = async () => {
+    if (!user) return;
+    setError(null);
+    setLogs([]);
+    setCosts({});
+
+    // Step 1: Create asset
+    setPhase("creating");
+    addLog("Creando asset…");
+
+    const { data: createData, error: createError } = await supabase.functions.invoke("create-asset", {
+      body: { source_url: url.trim(), rights_confirmed: rights },
+    });
+
+    if (createError || !createData?.asset) {
+      setError(createData?.error || createError?.message || "Error creando asset");
+      setPhase("error");
+      return;
+    }
+
+    const asset = createData.asset;
+    setAssetId(asset.id);
+
+    if (createData.cached && asset.status !== "PENDING") {
+      addLog("Asset ya existente (cache hit)");
+      if (asset.status === "VIDEO_INGESTED" || asset.status === "BLUEPRINT_GENERATED" || asset.status === "IMAGE_APPROVED" || asset.status === "VIDEO_RENDERED") {
+        setCosts({ download: "$0.00", transcribe: "$0.00" });
+        setPhase("done");
+        addLog("Video ya fue ingestado previamente ✓");
+        return;
+      }
+    }
+
+    addLog(`Asset creado: ${asset.id.slice(0, 8)}…`);
+
+    // Step 2: Ingest (download + transcribe)
+    setPhase("downloading");
+    addLog("Conectando con TikTok…");
+
+    const { data: ingestData, error: ingestError } = await supabase.functions.invoke("ingest-asset", {
+      body: { asset_id: asset.id },
+    });
+
+    if (ingestError || ingestData?.error) {
+      const errMsg = ingestData?.error || ingestError?.message || "Error en ingesta";
+      setError(errMsg);
+      setPhase("error");
+      addLog(`Error: ${errMsg}`);
+      return;
+    }
+
+    // Calculate costs from jobs
+    const jobs = ingestData.jobs || [];
+    const downloadCost = jobs.find((j: any) => j.type === "download_video")?.cost_json?.estimated_cost;
+    const transcribeCost = jobs.find((j: any) => j.type === "transcribe")?.cost_json?.estimated_cost;
+    setCosts({
+      download: downloadCost ? `$${downloadCost}` : "$0.05",
+      transcribe: transcribeCost ? `$${transcribeCost}` : "$0.25",
+    });
+
+    addLog("Video descargado ✓");
+    addLog("Transcripción completa ✓");
+    setPhase("done");
   };
 
   return (
@@ -57,7 +153,7 @@ const Ingest = () => {
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className="min-h-[80px] font-mono text-sm bg-muted/50 border-border focus:ring-primary resize-none"
-              disabled={analyzing || done}
+              disabled={isProcessing || phase === "done"}
             />
           </div>
 
@@ -67,7 +163,7 @@ const Ingest = () => {
               id="rights"
               checked={rights}
               onCheckedChange={(v) => setRights(v === true)}
-              disabled={analyzing || done}
+              disabled={isProcessing || phase === "done"}
               className="mt-0.5"
             />
             <label htmlFor="rights" className="text-sm text-muted-foreground leading-relaxed cursor-pointer">
@@ -77,20 +173,28 @@ const Ingest = () => {
             </label>
           </div>
 
-          {/* Cost estimate */}
+          {/* Error */}
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* Cost estimate + CTA */}
           <div className="flex items-center justify-between">
             <CostDisplay amount="~$0.30" label="costo estimado ingesta" size="md" />
             <Button
               onClick={handleAnalyze}
-              disabled={!url.trim() || analyzing || done}
+              disabled={!url.trim() || isProcessing || phase === "done"}
               className="gap-2"
             >
-              {analyzing ? (
+              {isProcessing ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Analizando…
+                  Procesando…
                 </>
-              ) : done ? (
+              ) : phase === "done" ? (
                 "Ingesta Completa ✓"
               ) : (
                 <>
@@ -104,7 +208,7 @@ const Ingest = () => {
 
         {/* Pipeline Progress */}
         <AnimatePresence>
-          {(analyzing || done) && (
+          {phase !== "idle" && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -113,19 +217,19 @@ const Ingest = () => {
               <PipelineStepper steps={steps} />
 
               <div className="rounded-lg bg-muted/30 border border-border p-4 space-y-2 font-mono text-xs">
-                {logMessages.slice(0, done ? 4 : 3).map((msg, i) => (
+                {logs.map((msg, i) => (
                   <motion.div
                     key={i}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.4 }}
+                    transition={{ delay: i * 0.15 }}
                     className="flex items-center gap-2"
                   >
                     <span className="text-muted-foreground/50">›</span>
                     <span className="text-muted-foreground">{msg}</span>
                   </motion.div>
                 ))}
-                {analyzing && (
+                {isProcessing && (
                   <div className="flex items-center gap-2 text-primary">
                     <Loader2 className="w-3 h-3 animate-spin" />
                     <span>Procesando…</span>
@@ -133,17 +237,15 @@ const Ingest = () => {
                 )}
               </div>
 
-              {done && (
+              {phase === "done" && assetId && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="flex justify-end"
                 >
-                  <Button className="gap-2" asChild>
-                    <a href="/asset/1/blueprint">
-                      Generar Blueprint
-                      <ArrowRight className="w-4 h-4" />
-                    </a>
+                  <Button className="gap-2" onClick={() => navigate(`/asset/${assetId}/blueprint`)}>
+                    Generar Blueprint
+                    <ArrowRight className="w-4 h-4" />
                   </Button>
                 </motion.div>
               )}
