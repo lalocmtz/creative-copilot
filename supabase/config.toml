@@ -1,1 +1,7 @@
 project_id = "kobnxoultplzcdxiaeqo"
+
+[functions.create-asset]
+verify_jwt = false
+
+[functions.ingest-asset]
+verify_jwt = false

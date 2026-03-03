@@ -278,20 +278,20 @@ CREATE POLICY "Service role can manage files"
 ## Phase 2 — Ingesta (Video Ingest Pipeline)
 
 ### 2.1 Edge Function: `ingest-asset`
-- [ ] Create `supabase/functions/ingest-asset/index.ts`
-- [ ] Accept `{ asset_id }`, validate ownership via JWT
-- [ ] Check cache: if `source_hash` exists with transcript → skip, return cached
-- [ ] Create job record with `idempotency_key = download_video:{asset_id}:{source_hash}`
-- [ ] Call Apify to download TikTok video → upload to Supabase Storage (`ugc-assets/{user_id}/{asset_id}/source.mp4`)
-- [ ] Save `metadata_json.video_url`, `metadata_json.duration`, `metadata_json.resolution`
-- [ ] Create job for transcription with `idempotency_key = transcribe:{asset_id}:{source_hash}`
-- [ ] Call Whisper API → save `transcript` on asset
-- [ ] Update `assets.status = 'VIDEO_INGESTED'`
-- [ ] Return updated asset + jobs with costs
+- [x] Create `supabase/functions/ingest-asset/index.ts`
+- [x] Accept `{ asset_id }`, validate ownership via JWT
+- [x] Check cache: if `source_hash` exists with transcript → skip, return cached
+- [x] Create job record with `idempotency_key = download_video:{asset_id}:{source_hash}`
+- [x] Call Apify to download TikTok video → upload to Supabase Storage (`ugc-assets/{user_id}/{asset_id}/source.mp4`)
+- [x] Save `metadata_json.video_url`, `metadata_json.duration`, `metadata_json.resolution`
+- [x] Create job for transcription with `idempotency_key = transcribe:{asset_id}:{source_hash}`
+- [x] Call Whisper API → save `transcript` on asset
+- [x] Update `assets.status = 'VIDEO_INGESTED'`
+- [x] Return updated asset + jobs with costs
 
 #### Secrets Needed
-- `APIFY_API_KEY` — for TikTok video download
-- `OPENAI_API_KEY` — for Whisper transcription
+- `APIFY_API_KEY` — for TikTok video download ⚠️ PENDING
+- `OPENAI_API_KEY` — for Whisper transcription ⚠️ PENDING
 
 #### Idempotency Pattern (edge function pseudocode)
 ```typescript
@@ -312,32 +312,31 @@ if (existingJob) {
 ---
 
 ### 2.2 Frontend: Ingest Page (wire to real backend)
-- [ ] Replace mock `handleAnalyze` with real edge function call
-- [ ] On submit: create asset via `supabase.from('assets').insert(...)`, then call `ingest-asset` function
-- [ ] Poll `jobs` table or use Supabase realtime to update stepper
-- [ ] Show real cost from `jobs.cost_json`
-- [ ] On complete: enable "Generate Blueprint" button with link to `/asset/{id}/blueprint`
-- [ ] Handle errors: show friendly message from `jobs.error_message`
+- [x] Replace mock `handleAnalyze` with real edge function call
+- [x] On submit: create asset via edge function, then call `ingest-asset` function
+- [x] Show real cost from `jobs.cost_json`
+- [x] On complete: enable "Generate Blueprint" button with link to `/asset/{id}/blueprint`
+- [x] Handle errors: show friendly message
 
 > **Ref**: [design-guidelines.md](./design-guidelines.md) — Kindness in error messages, cost transparency
 
 ---
 
 ### 2.3 Edge Function: `create-asset`
-- [ ] Create `supabase/functions/create-asset/index.ts`
-- [ ] Accept `{ source_url, rights_confirmed }`
-- [ ] Compute `source_hash` from URL (or content hash)
-- [ ] Check dedupe: same user + same `source_hash` → return existing asset
-- [ ] Insert asset with `status = 'PENDING'`
-- [ ] Return created asset
+- [x] Create `supabase/functions/create-asset/index.ts`
+- [x] Accept `{ source_url, rights_confirmed }`
+- [x] Compute `source_hash` from URL (or content hash)
+- [x] Check dedupe: same user + same `source_hash` → return existing asset
+- [x] Insert asset with `status = 'PENDING'`
+- [x] Return created asset
 
 ---
 
 ### 2.4 Dashboard: Real Data
-- [ ] Fetch user's assets from Supabase (list with status, created_at)
-- [ ] Show latest renders count + total cost
-- [ ] Link each asset row to its current step (blueprint/studio based on status)
-- [ ] Empty state: "No assets yet. Start by analyzing your first winning video."
+- [x] Fetch user's assets from Supabase (list with status, created_at)
+- [x] Show latest renders count + total cost
+- [x] Link each asset row to its current step (blueprint/studio based on status)
+- [x] Empty state: "No assets yet. Start by analyzing your first winning video."
 
 > **Ref**: [app-flow-pages-and-roles.md](./app-flow-pages-and-roles.md) — Dashboard shows assets, statuses, costs
 
