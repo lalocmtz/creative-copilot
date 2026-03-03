@@ -92,54 +92,87 @@ Deno.serve(async (req) => {
       .createSignedUrl(thumbPath, 60 * 30);
     const thumbRefUrl = thumbSignedData?.signedUrl || null;
 
-    // Build the prompt — always instruct product-in-hand
+    // Build the prompt — photorealistic compositor strategy
     const scenarioDesc = render.scenario_prompt || "natural UGC-style scene, person talking to camera";
-    const intensityLabel = (render.emotional_intensity ?? 50) > 70 ? "high energy, very expressive" : (render.emotional_intensity ?? 50) > 40 ? "moderate, natural" : "calm, composed";
+    const intensity = render.emotional_intensity ?? 50;
+    const intensityLabel = intensity > 70 ? "high energy, very expressive" : intensity > 40 ? "moderate, natural" : "calm, composed";
     const productImageUrl = render.product_image_url || null;
 
-    const productInstruction = productImageUrl
-      ? `CRITICAL: The person MUST be holding the EXACT product shown in the product reference image in their hand, showing it naturally to the camera. The product must be clearly visible, realistic, and match the reference image precisely. Do NOT invent a different product.`
-      : `The person should be holding a product naturally in their hand, showing it to the camera.`;
+    // System prompt: compositor realista
+    const systemPrompt = `You are a photorealistic image compositor specializing in UGC content. Your job is to create a photo where a person naturally holds a real product.
 
-    const imagePrompt = thumbRefUrl
-      ? `Look at this reference image (a frame from the original TikTok video). Generate a NEW photo that replicates the EXACT same composition:
-- Same camera distance and angle
-- Same type of background and setting
-- Same lighting conditions and color temperature
-- Same framing (how much of the person is visible)
+ABSOLUTE RULES:
+- NEVER paste a flat mockup onto the image. The product must be reconstructed as a real 3D photographed object.
+- NEVER deform, add, or duplicate hands/fingers. Hands must look anatomically correct.
+- NEVER duplicate the product (only ONE instance).
+- NEVER add random objects (phones, other products) that weren't requested.
+- NEVER change the face/body/clothing if editing an existing person.
+- The product label/text must look printed and wrapped with realistic curvature — NOT flat or digitally overlaid.
 
-But change the PERSON completely — different face, different identity. Keep everything else as close to the original as possible.
+PHYSICAL COHERENCE RULES:
+- Match the scene's lighting direction and color temperature on the product surface.
+- Add contact shadows where fingers grip the product.
+- Show correct finger occlusion (fingers in FRONT of the product where they naturally grip).
+- Add realistic specular highlights based on the product material (plastic = soft highlights, glass = sharp reflections).
+- Product scale must be physically correct relative to the hand size.
+- If the product has a curved surface (bottle, jar), the label must follow that curvature.
+- Add natural camera grain/noise matching the rest of the photo.`;
 
-${productInstruction}
+    // User prompt with clear image labeling
+    const hasProduct = !!productImageUrl;
+    const hasThumb = !!thumbRefUrl;
 
-Additional scene details: ${scenarioDesc}
-Expression/energy: ${intensityLabel}
-Format: Portrait 9:16, natural smartphone camera quality (NOT studio photography). Should look like a real person filmed this on their phone.`
-      : `Generate a natural UGC-style photo matching this description exactly:
-${scenarioDesc}
-Expression/energy: ${intensityLabel}
+    let imageLabeling = "";
+    if (hasThumb && hasProduct) {
+      imageLabeling = `You are receiving TWO reference images:
+- IMAGE 1 (first image): Scene/composition reference from the original video. Copy the camera angle, distance, framing, background type, and lighting direction from this image.
+- IMAGE 2 (second image): The EXACT product the person must hold. Reconstruct this product as a real 3D object — study its shape, material, colors, label design, and texture.
 
-${productInstruction}
+`;
+    } else if (hasThumb) {
+      imageLabeling = `You are receiving ONE reference image: a scene/composition reference. Copy the camera angle, framing, and lighting.\n\n`;
+    } else if (hasProduct) {
+      imageLabeling = `You are receiving ONE reference image: the product the person must hold. Reconstruct it as a real 3D object.\n\n`;
+    }
 
-Format: Portrait 9:16, natural smartphone camera quality. Should look like a real selfie/video screenshot, NOT a professional studio photo.`;
+    const imagePrompt = `${imageLabeling}Generate a NEW UGC-style photo with these requirements:
+
+PERSON: New person (different identity from reference), natural look, ${intensityLabel} expression.
+COMPOSITION: ${hasThumb ? "Match the exact camera distance, angle, background type, and framing from IMAGE 1." : scenarioDesc}
+PRODUCT INTEGRATION (CRITICAL):
+- The person MUST be holding ${hasProduct ? "the EXACT product from IMAGE 2" : "a product"} in their hand, showing it naturally to the camera.
+- Reconstruct the product as a real photographed 3D object — NOT a flat mockup pasted on.
+- Match the scene lighting direction and color temperature on the product surface.
+- Add contact shadows where fingers touch/grip the product.
+- Show correct finger overlap: fingers that grip the product must appear IN FRONT of it.
+- Realistic specular highlights on the product surface (match material: plastic, glass, etc.).
+- If the product has a label, it must look printed with natural curvature following the bottle/jar shape — NOT flat.
+- Product scale must be physically correct for the hand size.
+
+SCENE: ${scenarioDesc}
+
+FORBIDDEN (do NOT include ANY of these):
+- Flat/pasted mockup look, unrealistic glow around product
+- Extra fingers, deformed hands, extra hands
+- Duplicated products (only ONE)
+- Wrong product scale, floating product
+- CGI/rendered look, overly smooth skin
+- Random objects not requested (phones, other items)
+- Watermarks, text overlays
+
+FORMAT: Portrait 9:16 aspect ratio, natural smartphone camera quality with subtle grain. Must look like a real person filmed this on their phone — NOT studio photography.`;
 
     console.log("Generating image with Lovable AI (gemini-3-pro-image-preview)");
-    console.log("Has thumbnail reference:", !!thumbRefUrl);
-    console.log("Has product image reference:", !!productImageUrl);
+    console.log("Has thumbnail reference:", hasThumb);
+    console.log("Has product image reference:", hasProduct);
 
-    // Build messages for the AI — include product image as additional reference
+    // Build messages — system + user with labeled reference images
     const userContent: any[] = [];
     if (thumbRefUrl) {
-      userContent.push({
-        type: "image_url",
-        image_url: { url: thumbRefUrl },
-      });
+      userContent.push({ type: "image_url", image_url: { url: thumbRefUrl } });
     }
     if (productImageUrl) {
-      userContent.push({
-        type: "image_url",
-        image_url: { url: productImageUrl },
-      });
+      userContent.push({ type: "image_url", image_url: { url: productImageUrl } });
     }
     userContent.push({ type: "text", text: imagePrompt });
 
@@ -151,7 +184,10 @@ Format: Portrait 9:16, natural smartphone camera quality. Should look like a rea
       },
       body: JSON.stringify({
         model: "google/gemini-3-pro-image-preview",
-        messages: [{ role: "user", content: userContent }],
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
         modalities: ["image", "text"],
       }),
     });
