@@ -23,9 +23,18 @@ const actors = [
 ];
 
 const voices = [
-  { id: "v1", name: "Sarah", style: "Femenina, cálida", gender: "femenino" },
-  { id: "v2", name: "George", style: "Masculino, confiable", gender: "masculino" },
-  { id: "v3", name: "Lily", style: "Femenina, energética", gender: "femenino" },
+  // Female
+  { id: "sarah", name: "Sarah", style: "Cálida, natural", gender: "femenino" },
+  { id: "lily", name: "Lily", style: "Energética, joven", gender: "femenino" },
+  { id: "jessica", name: "Jessica", style: "Joven, dinámica", gender: "femenino" },
+  { id: "laura", name: "Laura", style: "Profesional, clara", gender: "femenino" },
+  { id: "alice", name: "Alice", style: "Amigable, fresca", gender: "femenino" },
+  // Male
+  { id: "george", name: "George", style: "Confiable, firme", gender: "masculino" },
+  { id: "charlie", name: "Charlie", style: "Casual, cercano", gender: "masculino" },
+  { id: "brian", name: "Brian", style: "Firme, profesional", gender: "masculino" },
+  { id: "liam", name: "Liam", style: "Joven, enérgico", gender: "masculino" },
+  { id: "eric", name: "Eric", style: "Versátil, neutro", gender: "masculino" },
 ];
 
 const Studio = () => {
@@ -47,13 +56,14 @@ const Studio = () => {
   const [level, setLevel] = useState("2");
   const [script, setScript] = useState("");
   const [actor, setActor] = useState("a1");
-  const [voice, setVoice] = useState("v1");
+  const [voice, setVoice] = useState("sarah");
   const [intensity, setIntensity] = useState([50]);
   const [scenario, setScenario] = useState("");
   const [populated, setPopulated] = useState(false);
   const [productImage, setProductImage] = useState<File | null>(null);
   const [productPreview, setProductPreview] = useState<string | null>(null);
   const [uploadingProduct, setUploadingProduct] = useState(false);
+  const [showAllVoices, setShowAllVoices] = useState(false);
 
   // Auto-populate from blueprint data
   useEffect(() => {
@@ -70,10 +80,10 @@ const Studio = () => {
     const gender = analysis?.genero_detectado;
     if (gender === "masculino") {
       setActor("a2");
-      setVoice("v2");
+      setVoice("george");
     } else {
       setActor("a1");
-      setVoice("v1");
+      setVoice("sarah");
     }
 
     // Scenario from blueprint
@@ -100,7 +110,7 @@ const Studio = () => {
     if (populated || !render) return;
     setLevel(String(render.variation_level ?? 2));
     setActor(render.actor_id ?? "a1");
-    setVoice(render.voice_id ?? "v1");
+    setVoice(render.voice_id ?? "sarah");
     setIntensity([render.emotional_intensity ?? 50]);
     setScenario(render.scenario_prompt ?? "");
   }, [render, populated]);
@@ -349,22 +359,38 @@ const Studio = () => {
           </div>
 
           <div className="rounded-xl border border-border gradient-card p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Mic className="w-4 h-4 text-primary" />
-              Voz
-            </h3>
-            <Select value={voice} onValueChange={setVoice}>
-              <SelectTrigger className="h-9 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {voices.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    {v.name} — {v.style}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Mic className="w-4 h-4 text-primary" />
+                Voz
+              </h3>
+              <button
+                onClick={() => setShowAllVoices(!showAllVoices)}
+                className="text-[10px] text-muted-foreground hover:text-primary transition-colors"
+              >
+                {showAllVoices ? "Solo género detectado" : "Ver todas"}
+              </button>
+            </div>
+            {(() => {
+              const detectedGender = (blueprint?.analysis_json as any)?.genero_detectado;
+              const filteredVoices = showAllVoices || !detectedGender
+                ? voices
+                : voices.filter(v => v.gender === detectedGender);
+              return (
+                <Select value={voice} onValueChange={setVoice}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredVoices.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        {v.name} — {v.style}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              );
+            })()}
 
             <div>
               <div className="flex justify-between mb-2">
