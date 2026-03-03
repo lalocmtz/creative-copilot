@@ -13,12 +13,7 @@ function json(body: unknown, status = 200) {
 }
 
 const KIE_BASE = "https://api.kie.ai/api/v1";
-
-const VOICE_MAP: Record<string, string> = {
-  v1: "Sarah",
-  v2: "George",
-  v3: "Lily",
-};
+const KIE_FILE_UPLOAD = "https://kieai.redpandaai.co/api/file-url-upload";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -44,64 +39,100 @@ Deno.serve(async (req) => {
 
     const { data: render, error: renderErr } = await supabaseAdmin
       .from("renders")
-      .select("*, assets!inner(id, user_id, status, transcript)")
+      .select("*, assets!inner(id, user_id, status)")
       .eq("id", render_id)
       .single();
     if (renderErr || !render) return json({ error: "Render not found" }, 404);
     if ((render as any).assets.user_id !== userId) return json({ error: "Unauthorized" }, 403);
     if (render.status !== "IMAGE_APPROVED") return json({ error: `Render must be IMAGE_APPROVED, got ${render.status}` }, 409);
 
-    // Get script
-    const { data: blueprint } = await supabaseAdmin.from("blueprints").select("variations_json").eq("asset_id", render.asset_id).single();
-    const variations = blueprint?.variations_json as any[];
-    const variation = variations?.find((v: any) => v.nivel === render.variation_level);
-    const script = variation?.guion || (render as any).assets.transcript || "";
-    if (!script) return json({ error: "No script found" }, 400);
+    const assetId = render.asset_id;
+    const baseImageUrl = render.base_image_url;
+    if (!baseImageUrl) return json({ error: "No base image URL" }, 400);
 
     // Set status to RENDERING
     await supabaseAdmin.from("renders").update({ status: "RENDERING" }).eq("id", render_id);
 
     // Idempotency check
-    const idempotencyKey = `final_video:${render_id}`;
+    const idempotencyKey = `motion_transfer:${render_id}`;
     const { data: existingJob } = await supabaseAdmin.from("jobs").select("*").eq("idempotency_key", idempotencyKey).eq("status", "DONE").maybeSingle();
     if (existingJob) return json({ message: "Already completed", job: existingJob });
 
     // Create/update job
     const { data: job } = await supabaseAdmin.from("jobs").upsert(
-      { asset_id: render.asset_id, render_id, type: "video" as any, status: "RUNNING" as any, idempotency_key: idempotencyKey, attempts: 1 },
+      { asset_id: assetId, render_id, type: "video" as any, status: "RUNNING" as any, idempotency_key: idempotencyKey, attempts: 1 },
       { onConflict: "idempotency_key" }
     ).select().single();
 
-    // KICKOFF: Start TTS task only
-    const voiceName = VOICE_MAP[render.voice_id || "v1"] || "Sarah";
-    const ttsRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
+    // Step 1: Get signed URL for source video
+    const sourceVideoPath = `${userId}/${assetId}/source.mp4`;
+    const { data: signedData, error: signErr } = await supabaseAdmin.storage
+      .from("ugc-assets")
+      .createSignedUrl(sourceVideoPath, 60 * 60); // 1 hour
+    if (signErr || !signedData?.signedUrl) throw new Error(`Failed to get source video URL: ${signErr?.message}`);
+    const sourceVideoUrl = signedData.signedUrl;
+    console.log("[KICKOFF] Source video signed URL obtained");
+
+    // Step 2: Upload source video to KIE AI file service
+    const uploadVideoRes = await fetch(KIE_FILE_UPLOAD, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: sourceVideoUrl }),
+    });
+    const uploadVideoData = await uploadVideoRes.json();
+    if (!uploadVideoData?.data?.url) throw new Error(`Video upload to KIE failed: ${JSON.stringify(uploadVideoData)}`);
+    const kieVideoUrl = uploadVideoData.data.url;
+    console.log("[KICKOFF] Source video uploaded to KIE:", kieVideoUrl);
+
+    // Step 3: Upload base image to KIE AI file service
+    const uploadImageRes = await fetch(KIE_FILE_UPLOAD, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: baseImageUrl }),
+    });
+    const uploadImageData = await uploadImageRes.json();
+    if (!uploadImageData?.data?.url) throw new Error(`Image upload to KIE failed: ${JSON.stringify(uploadImageData)}`);
+    const kieImageUrl = uploadImageData.data.url;
+    console.log("[KICKOFF] Base image uploaded to KIE:", kieImageUrl);
+
+    // Step 4: Create motion control task (Kling 2.6)
+    const motionPrompt = render.scenario_prompt
+      ? `A person in ${render.scenario_prompt}. Natural movement and expression.`
+      : "A person speaking naturally with expressive gestures.";
+
+    const motionRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "elevenlabs/text-to-speech-turbo-2-5",
-        input: { text: script, voice: voiceName, stability: 0.5, similarity_boost: 0.75, speed: 1, language_code: "es" },
+        model: "kling-2.6/motion-control",
+        input: {
+          input_urls: [kieImageUrl],
+          video_urls: [kieVideoUrl],
+          character_orientation: "video",
+          mode: "1080p",
+          prompt: motionPrompt,
+        },
       }),
     });
-    const ttsData = await ttsRes.json();
-    if (ttsData.code !== 200) throw new Error(`TTS creation failed: ${ttsData.msg}`);
-    const ttsTaskId = ttsData.data.taskId;
-    console.log(`[KICKOFF] TTS task started: ${ttsTaskId}`);
+    const motionData = await motionRes.json();
+    if (motionData.code !== 200) throw new Error(`Motion control task failed: ${motionData.msg}`);
+    const motionTaskId = motionData.data.taskId;
+    console.log(`[KICKOFF] Motion control task started: ${motionTaskId}`);
 
-    // Save task IDs and progress into the render record
+    // Save task ID and progress
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
-        _tasks: { tts_task_id: ttsTaskId, video_task_id: null },
-        _progress: { step: "tts_processing", detail: "Procesando voz…", updated_at: new Date().toISOString() },
+        _tasks: { motion_task_id: motionTaskId },
+        _progress: { step: "motion_starting", detail: "Iniciando transferencia de movimiento…", updated_at: new Date().toISOString() },
         _job_id: job?.id,
-        _image_url: render.base_image_url,
-        _scenario_prompt: render.scenario_prompt,
+        _image_url: baseImageUrl,
+        _source_video_path: sourceVideoPath,
         _user_id: userId,
-        _asset_id: render.asset_id,
+        _asset_id: assetId,
       },
     }).eq("id", render_id);
 
-    // Return immediately — frontend will poll
-    return json({ started: true, tts_task_id: ttsTaskId });
+    return json({ started: true, motion_task_id: motionTaskId });
   } catch (err: any) {
     console.error("[ERROR]", err.message);
     try {

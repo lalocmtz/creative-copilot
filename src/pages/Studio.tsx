@@ -519,15 +519,16 @@ const Studio = () => {
                     </div>
                     {(render.cost_breakdown_json as any)?.audio_url && (
                       <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground font-medium">Audio (TTS)</p>
+                        <p className="text-xs text-muted-foreground font-medium">Audio Original</p>
                         <audio
                           src={(render.cost_breakdown_json as any).audio_url}
                           controls
                           className="w-full h-8"
                         />
+                        <p className="text-[10px] text-muted-foreground">Audio del video original (reproducir junto al video)</p>
                       </div>
                     )}
-                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.83"}`} label="costo total render" size="sm" />
+                    <CostDisplay amount={`$${render.render_cost?.toFixed(2) || "0.90"}`} label="costo motion transfer" size="sm" />
                     <div className="flex gap-2">
                       <a
                         href={render.final_video_url}
@@ -541,11 +542,14 @@ const Studio = () => {
                         </Button>
                       </a>
                     </div>
-                    <p className="text-xs text-success text-center font-medium">✓ Video generado exitosamente</p>
+                    <p className="text-xs text-success text-center font-medium">✓ Motion transfer completado</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <CostDisplay amount="~$0.83" label="TTS + video (5s)" size="md" />
+                    <CostDisplay amount="~$0.90" label="motion transfer (1080p)" size="md" />
+                    <p className="text-[10px] text-muted-foreground text-center">
+                      Transferencia estructural — misma duración y gestos del video original
+                    </p>
                     {isRendering && (
                       <RenderProgressPanel progress={(render?.cost_breakdown_json as any)?._progress} />
                     )}
@@ -557,11 +561,11 @@ const Studio = () => {
                       {isRendering ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Generando…
+                          Transfiriendo movimiento…
                         </>
                       ) : (
                         <>
-                          Generar Video Final
+                          Iniciar Motion Transfer
                           <Film className="w-4 h-4" />
                         </>
                       )}
