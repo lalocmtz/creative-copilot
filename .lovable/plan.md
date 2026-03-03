@@ -1,167 +1,62 @@
 
 
-# Plan: Rediseño Completo — Workspace Unificado + Sistema de Créditos
+# Plan: Reemplazar InfiniteTalk con Kling I2V + Audio Overlay
 
-Este plan transforma la experiencia de 4 páginas separadas (Dashboard, Ingest, Blueprint, Studio) en un **workspace unificado progresivo** y añade un **sistema de créditos por video** reemplazando la visualización de costos internos.
+## Problema
+El pipeline actual usa InfiniteTalk lip-sync vía KIE AI, que tarda 5-15 minutos y se queda "zombie". El polling manual en Workspace.tsx usa intervalos de 10s. No hay timeout de protección.
 
----
+## Solución
+Reemplazar InfiniteTalk con **Kling 2.6 Image-to-Video** (30-60s) y entregar el video animado + TTS audio como overlay en el frontend. Agregar timeout de 5 minutos.
 
-## Parte A: Sistema de Créditos (Backend)
+## Archivos a Modificar
 
-### A1. Migración — Nuevas tablas
+### 1. `supabase/functions/generate-final-video/index.ts`
+- Mantener: condensación de script + ElevenLabs TTS + upload audio a storage
+- **Reemplazar** InfiniteTalk (líneas 206-267) con:
+  - Upload imagen a KIE (ya existe)
+  - Eliminar upload de audio a KIE (no se necesita)
+  - Crear tarea `kling/v2.0/image2video` con prompt dinámico basado en scenario + emotional intensity
+  - Guardar `kling_task_id` + `tts_audio_url` en `cost_breakdown_json._tasks`
+  - Guardar timestamp `_started_at` para timeout
+- Progress steps: `condensing_script` → `generating_tts` → `animating_image` (en vez de `starting_lipsync` / `generating_lipsync`)
 
-```sql
-CREATE TABLE public.user_credits (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  total_credits INT NOT NULL DEFAULT 3,
-  used_credits INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(user_id)
-);
+### 2. `supabase/functions/poll-render-status/index.ts`
+- Cambiar lectura de `lipsync_task_id` → `kling_task_id` en `breakdown._tasks`
+- Adaptar polling de tarea Kling (mismo `checkTask`, diferente campo)
+- Al completar: descargar video Kling, subirlo a storage
+- Guardar TANTO `final_video_url` (video sin audio) como `tts_audio_url` en el render
+- **Agregar timeout**: si `_started_at` > 5 minutos, auto-marcar como FAILED sin descontar crédito
+- Actualizar costos: TTS $0.02 + Kling I2V ~$0.08 = ~$0.10 total
 
-CREATE TABLE public.credit_transactions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('PURCHASE','USAGE','REFUND')),
-  credits_delta INT NOT NULL,
-  related_render_id UUID REFERENCES public.renders(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+### 3. `src/components/RenderProgressPanel.tsx`
+- Simplificar STEPS a 3:
+  1. `generating_tts` — "Generando voz…" (15%)
+  2. `animating_image` — "Animando imagen (~30-60s)…" (50%)
+  3. `finalizing` — "Finalizando video…" (90%)
+
+### 4. `src/pages/Workspace.tsx`
+- Línea 170: cambiar polling interval de `10000` → `5000`
+- Líneas 602-610: cambiar `<video>` para reproducir video + audio overlay:
+  - Si `render.final_video_url` existe, mostrar `<video>` con el video
+  - Si `(render.cost_breakdown_json as any)?._tts_audio_url` existe, agregar `<audio>` sincronizado
+  - O más simple: almacenar `tts_audio_url` como campo separado en el render record y usar `<video>` + `<audio>` con refs sincronizados
+
+### 5. Schema consideration
+- El campo `tts_audio_url` se puede almacenar dentro de `cost_breakdown_json` en el render final (no requiere migración DB), o bien usar el campo existente `final_video_url` para el video y agregar audio URL en el breakdown.
+
+## Prompt para Kling I2V
 ```
-
-RLS policies: users can SELECT own rows. Service role full access on both. Trigger to auto-create `user_credits` row on first login (via DB function or edge function).
-
-### A2. Credit deduction logic
-
-Create a DB trigger or modify `poll-render-status` edge function: when `render.status` transitions to `DONE`, deduct 1 credit and insert a `credit_transactions` record. If render fails, no deduction.
-
-### A3. Hook `useCredits`
-
-New hook to fetch `user_credits` for current user, with refetch on render completion.
-
----
-
-## Parte B: Workspace Unificado (Frontend)
-
-### B1. Nueva página `Workspace.tsx`
-
-Reemplaza Ingest + Blueprint + Studio. Una sola página con secciones que se auto-revelan progresivamente:
-
-```text
-┌─────────────────────────────────────────────┐
-│  SECTION 1: INPUT                           │
-│  URL field + rights checkbox + "Analyze"    │
-│  Progress stepper (inline)                  │
-├─────────────────────────────────────────────┤
-│  SECTION 2: BLUEPRINT (auto-visible)        │
-│  Transcript (collapsible) + Analysis cards  │
-│  Variation tabs (Nivel 1/2/3)               │
-├─────────────────────────────────────────────┤
-│  SECTION 3: CONTROL PANEL                   │
-│  Script editor | Actor+Voice+Intensity      │
-│  (2 cols desktop, 1 col mobile)             │
-├─────────────────────────────────────────────┤
-│  SECTION 4: OUTPUT                          │
-│  Image preview + Generate/Approve           │
-│  Final video + Generate button              │
-└─────────────────────────────────────────────┘
+Subtle natural movement, person gently moving and gesturing as if speaking to camera.
+UGC style, handheld camera feel, 9:16 vertical format.
+{scenario_prompt excerpt}
 ```
+- Modelo: `kling/v2.0/image2video`
+- Duración: 10s
+- Resolución: 720p
 
-Each section is hidden until the previous step completes. Uses existing hooks (`useAsset`, `useBlueprint`, `useRender`, etc.) — **no backend changes** for the pipeline itself.
-
-### B2. Route changes
-
-- Keep Dashboard (`/`) as asset list with "New Video" button
-- New route `/workspace` for fresh ingest (no asset yet)
-- New route `/workspace/:id` for existing asset (auto-loads to correct section)
-- Remove `/ingest`, `/asset/:id/blueprint`, `/asset/:id/studio` routes
-- Update Dashboard links to point to `/workspace/:id`
-
-### B3. Credit confirmation modal
-
-Before "Generate Final Video": show `AlertDialog` with "This will use 1 credit. You have X remaining." Cancel / Generate.
-
-### B4. AppLayout update
-
-- Sidebar: replace "$4.20 / $50" with "Credits: X remaining" + "Buy More" button (placeholder)
-- Remove CostDisplay from all sections
-- Simplify nav: Dashboard + New Video only
-
----
-
-## Parte C: Overhaul Estético
-
-### C1. CSS tokens update (`index.css`)
-
-```css
---background: 225 50% 4%;    /* #0B0F17 */
---card: 220 45% 7%;          /* #111827 */
---border: 217 33% 12%;       /* #1F2937 */
---primary: 168 60% 50%;      /* #2DD4BF teal */
-```
-
-More whitespace: increase card padding from `p-5` to `p-6`, section gaps from `gap-5` to `gap-8`.
-
-### C2. Remove all CostDisplay usage
-
-Replace with clean, cost-free UI. Only credit count in header.
-
-### C3. Mobile responsive
-
-- Workspace sections stack vertically
-- Blueprint in accordion
-- Sticky "Generate Video" button at bottom
-- Voice/actor selectors full-width
-
----
-
-## Parte D: UX Inteligente
-
-### D1. Voice filtering by detected gender
-
-Already partially implemented. Enhance: auto-select first voice matching detected gender on blueprint load. Remove actor gender mismatch options by default.
-
-### D2. Progressive disclosure
-
-Each section disabled/hidden until prerequisite completes:
-- Section 2 hidden until `asset.status >= VIDEO_INGESTED`
-- Section 3 hidden until blueprint exists
-- Section 4 hidden until draft has script + actor + voice
-- "Generate Video" disabled until image approved
-
-### D3. Auto-save drafts
-
-Debounce save on script/actor/voice/intensity changes (no manual "Guardar Borrador" button).
-
----
-
-## Implementation Order
-
-1. **DB migration**: `user_credits` + `credit_transactions` tables with RLS
-2. **`useCredits` hook** + credit deduction in `poll-render-status`
-3. **`Workspace.tsx`** — merge Ingest+Blueprint+Studio logic
-4. **Route updates** + AppLayout credit display
-5. **CSS overhaul** — new tokens + spacing
-6. **Remove CostDisplay** everywhere, add credit modal
-7. **Mobile responsive** pass
-8. **Update `docs/tasks.md`**
-
-## Files to Create
-- `src/pages/Workspace.tsx`
-- `src/hooks/useCredits.ts`
-- `src/components/CreditConfirmModal.tsx`
-
-## Files to Modify
-- `src/App.tsx` (routes)
-- `src/components/AppLayout.tsx` (sidebar credits)
-- `src/index.css` (color tokens)
-- `supabase/functions/poll-render-status/index.ts` (credit deduction)
-- `docs/tasks.md`
-
-## Files to Remove (or keep as redirects)
-- `src/pages/Ingest.tsx` — logic merged into Workspace
-- `src/pages/Blueprint.tsx` — logic merged into Workspace
-- `src/pages/Studio.tsx` — logic merged into Workspace
+## Resultado Esperado
+- Tiempo: ~60-90s (vs 5-15 min)
+- Costo: ~$0.10 (vs ~$0.15)
+- Sin renders zombie: timeout a 5 min
+- Video + voiceover sincronizado en el player
 
