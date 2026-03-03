@@ -9,6 +9,7 @@ import PipelineStepper from "@/components/PipelineStepper";
 import CostDisplay from "@/components/CostDisplay";
 import StatusBadge from "@/components/StatusBadge";
 import { Image, Mic, Film, Upload, Check, Loader2, User, Wand2 } from "lucide-react";
+import RenderProgressPanel from "@/components/RenderProgressPanel";
 import { motion } from "framer-motion";
 import { useAsset, useBlueprint } from "@/hooks/useSupabaseQueries";
 import { useRender, useCreateRenderDraft, useUpdateRender, useGenerateBaseImage, useApproveImage, useGenerateFinalVideo } from "@/hooks/useRender";
@@ -501,12 +502,7 @@ const Studio = () => {
                   <div className="space-y-3">
                     <CostDisplay amount="~$0.83" label="TTS + video (5s)" size="md" />
                     {isRendering && (
-                      <div className="bg-muted/30 rounded-lg p-3 text-center space-y-2">
-                        <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
-                        <p className="text-xs text-muted-foreground">
-                          Generando video… esto puede tardar hasta 5 minutos.
-                        </p>
-                      </div>
+                      <RenderProgressPanel progress={(render?.cost_breakdown_json as any)?._progress} />
                     )}
                     <Button
                       onClick={() => render && generateFinalVideo.mutate(render.id)}

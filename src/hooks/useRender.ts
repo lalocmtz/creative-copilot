@@ -2,11 +2,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
-/** Fetch the latest render for an asset */
+/** Fetch the latest render for an asset — polls every 5s when RENDERING */
 export const useRender = (assetId: string | undefined) =>
   useQuery({
     queryKey: ["renders", assetId],
     enabled: !!assetId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "RENDERING" ? 5000 : false;
+    },
     queryFn: async () => {
       const { data, error } = await supabase
         .from("renders")
