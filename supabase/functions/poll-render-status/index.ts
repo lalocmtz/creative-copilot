@@ -60,7 +60,6 @@ Deno.serve(async (req) => {
     const { render_id } = await req.json();
     if (!render_id) return json({ error: "render_id is required" }, 400);
 
-    // Get render with its stored task data
     const { data: render, error: renderErr } = await supabaseAdmin
       .from("renders")
       .select("*")
@@ -73,149 +72,93 @@ Deno.serve(async (req) => {
     const tasks = breakdown?._tasks;
     if (!tasks) return json({ error: "No task data found" }, 400);
 
-    const ttsTaskId = tasks.tts_task_id;
-    const videoTaskId = tasks.video_task_id;
+    const motionTaskId = tasks.motion_task_id;
+    if (!motionTaskId) return json({ error: "No motion task ID found" }, 400);
 
-    // CASE 1: Video task exists — check its status
-    if (videoTaskId) {
-      console.log(`[POLL] Checking video task: ${videoTaskId}`);
-      const videoStatus = await checkTask(videoTaskId, KIE_API_KEY);
+    // Check motion control task status
+    console.log(`[POLL] Checking motion task: ${motionTaskId}`);
+    const motionStatus = await checkTask(motionTaskId, KIE_API_KEY);
 
-      if (videoStatus.state === "fail") {
-        await supabaseAdmin.from("renders").update({
-          status: "FAILED",
-          cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Video failed: ${videoStatus.failMsg}` } },
-        }).eq("id", render_id);
-        return json({ status: "FAILED", step: "failed", detail: videoStatus.failMsg });
-      }
+    if (motionStatus.state === "fail") {
+      await supabaseAdmin.from("renders").update({
+        status: "FAILED",
+        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `Motion transfer failed: ${motionStatus.failMsg}` } },
+      }).eq("id", render_id);
+      return json({ status: "FAILED", step: "failed", detail: motionStatus.failMsg });
+    }
 
-      if (videoStatus.state !== "success") {
-        // Still processing
-        await supabaseAdmin.from("renders").update({
-          cost_breakdown_json: {
-            ...breakdown,
-            _progress: { step: "video_generating", detail: "Video generándose (~3 min)…", updated_at: new Date().toISOString() },
-          },
-        }).eq("id", render_id);
-        return json({ status: "RENDERING", step: "video_generating" });
-      }
-
-      // Video done! Download, upload, finalize
-      console.log("[POLL] Video complete! Finalizing...");
-      const videoFileUrl = videoStatus.resultJson?.resultUrls?.[0];
-      if (!videoFileUrl) throw new Error("Video returned no URL");
-
+    if (motionStatus.state !== "success") {
+      // Still processing
       await supabaseAdmin.from("renders").update({
         cost_breakdown_json: {
           ...breakdown,
-          _progress: { step: "uploading", detail: "Subiendo archivos…", updated_at: new Date().toISOString() },
+          _progress: { step: "motion_transferring", detail: "Transfiriendo movimiento (~3-5 min)…", updated_at: new Date().toISOString() },
         },
       }).eq("id", render_id);
-
-      // Download TTS result too
-      const ttsStatus = await checkTask(ttsTaskId, KIE_API_KEY);
-      const ttsFileUrl = ttsStatus.resultJson?.resultUrls?.[0];
-
-      const userId = breakdown._user_id;
-      const assetId = breakdown._asset_id;
-
-      // Download and upload files
-      const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
-      const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
-      const videoPath = `${userId}/${assetId}/renders/${render_id}/video.mp4`;
-      await supabaseAdmin.storage.from("ugc-assets").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-
-      let audioSignedUrl = null;
-      if (ttsFileUrl) {
-        const ttsDownloadUrl = await getDownloadUrl(ttsFileUrl, KIE_API_KEY);
-        const audioBuffer = await (await fetch(ttsDownloadUrl)).arrayBuffer();
-        const audioPath = `${userId}/${assetId}/renders/${render_id}/audio.mp3`;
-        await supabaseAdmin.storage.from("ugc-assets").upload(audioPath, audioBuffer, { contentType: "audio/mpeg", upsert: true });
-        const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(audioPath, 60 * 60 * 24 * 7);
-        audioSignedUrl = audioSigned?.signedUrl;
-      }
-
-      const { data: videoSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(videoPath, 60 * 60 * 24 * 7);
-      const totalCost = 0.83;
-
-      await supabaseAdmin.from("renders").update({
-        status: "DONE",
-        final_video_url: videoSigned?.signedUrl || videoFileUrl,
-        render_cost: totalCost,
-        cost_breakdown_json: {
-          tts: { provider: "elevenlabs", estimated_usd: 0.03 },
-          video: { provider: "kling", model: "v2-1-master", estimated_usd: 0.80 },
-          audio_url: audioSignedUrl,
-          total_usd: totalCost,
-        },
-      }).eq("id", render_id);
-
-      await supabaseAdmin.from("assets").update({ status: "VIDEO_RENDERED" }).eq("id", assetId);
-
-      if (breakdown._job_id) {
-        await supabaseAdmin.from("jobs").update({
-          status: "DONE",
-          cost_json: { tts: 0.03, video: 0.80, total: totalCost },
-          provider_job_id: `tts:${ttsTaskId},video:${videoTaskId}`,
-        }).eq("id", breakdown._job_id);
-      }
-
-      console.log("[POLL] Pipeline complete!");
-      return json({ status: "DONE", video_url: videoSigned?.signedUrl, audio_url: audioSignedUrl, cost: totalCost });
+      return json({ status: "RENDERING", step: "motion_transferring" });
     }
 
-    // CASE 2: Only TTS task — check its status
-    console.log(`[POLL] Checking TTS task: ${ttsTaskId}`);
-    const ttsStatus = await checkTask(ttsTaskId, KIE_API_KEY);
+    // Motion transfer done! Download and finalize
+    console.log("[POLL] Motion transfer complete! Finalizing...");
+    const videoFileUrl = motionStatus.resultJson?.resultUrls?.[0];
+    if (!videoFileUrl) throw new Error("Motion transfer returned no URL");
 
-    if (ttsStatus.state === "fail") {
-      await supabaseAdmin.from("renders").update({
-        status: "FAILED",
-        cost_breakdown_json: { ...breakdown, _progress: { step: "failed", detail: `TTS failed: ${ttsStatus.failMsg}` } },
-      }).eq("id", render_id);
-      return json({ status: "FAILED", step: "failed", detail: ttsStatus.failMsg });
-    }
-
-    if (ttsStatus.state !== "success") {
-      return json({ status: "RENDERING", step: "tts_processing" });
-    }
-
-    // TTS done! Start video generation
-    console.log("[POLL] TTS complete, starting video generation...");
-    const imageUrl = breakdown._image_url;
-    if (!imageUrl) throw new Error("No base image URL");
-
-    const motionPrompt = `A person naturally speaking and gesturing while presenting a product. ${breakdown._scenario_prompt || "Clean, well-lit setting."}. Smooth, natural movement. 9:16 vertical video.`;
-
-    const videoRes = await fetch(`${KIE_BASE}/jobs/createTask`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "kling/v2-1-master-image-to-video",
-        input: {
-          prompt: motionPrompt,
-          image_url: imageUrl,
-          duration: "5",
-          negative_prompt: "blur, distort, low quality, watermark",
-          cfg_scale: 0.5,
-        },
-      }),
-    });
-    const videoData = await videoRes.json();
-    if (videoData.code !== 200) throw new Error(`Video creation failed: ${videoData.msg}`);
-    const newVideoTaskId = videoData.data.taskId;
-    console.log(`[POLL] Video task started: ${newVideoTaskId}`);
-
-    // Save the video task ID
     await supabaseAdmin.from("renders").update({
       cost_breakdown_json: {
         ...breakdown,
-        _tasks: { ...tasks, video_task_id: newVideoTaskId },
-        _progress: { step: "video_starting", detail: "Iniciando generación de video…", updated_at: new Date().toISOString() },
+        _progress: { step: "downloading", detail: "Descargando resultado…", updated_at: new Date().toISOString() },
       },
     }).eq("id", render_id);
 
-    return json({ status: "RENDERING", step: "video_starting", video_task_id: newVideoTaskId });
+    const userId = breakdown._user_id;
+    const assetId = breakdown._asset_id;
+
+    // Download and upload final video
+    const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
+    const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
+    const videoPath = `${userId}/${assetId}/renders/${render_id}/video.mp4`;
+
+    await supabaseAdmin.from("renders").update({
+      cost_breakdown_json: {
+        ...breakdown,
+        _progress: { step: "uploading", detail: "Subiendo video final…", updated_at: new Date().toISOString() },
+      },
+    }).eq("id", render_id);
+
+    await supabaseAdmin.storage.from("ugc-assets").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+
+    // Get signed URL for the final video
+    const { data: videoSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(videoPath, 60 * 60 * 24 * 7);
+
+    // Get signed URL for the source audio (original video)
+    const sourceVideoPath = breakdown._source_video_path || `${userId}/${assetId}/source.mp4`;
+    const { data: audioSigned } = await supabaseAdmin.storage.from("ugc-assets").createSignedUrl(sourceVideoPath, 60 * 60 * 24 * 7);
+
+    const totalCost = 0.90; // ~$0.045/s × 20s at 1080p
+
+    await supabaseAdmin.from("renders").update({
+      status: "DONE",
+      final_video_url: videoSigned?.signedUrl || videoFileUrl,
+      render_cost: totalCost,
+      cost_breakdown_json: {
+        motion_transfer: { provider: "kling", model: "2.6-motion-control", mode: "1080p", estimated_usd: totalCost },
+        audio_url: audioSigned?.signedUrl,
+        total_usd: totalCost,
+      },
+    }).eq("id", render_id);
+
+    await supabaseAdmin.from("assets").update({ status: "VIDEO_RENDERED" }).eq("id", assetId);
+
+    if (breakdown._job_id) {
+      await supabaseAdmin.from("jobs").update({
+        status: "DONE",
+        cost_json: { motion_transfer: totalCost, total: totalCost },
+        provider_job_id: `motion:${motionTaskId}`,
+      }).eq("id", breakdown._job_id);
+    }
+
+    console.log("[POLL] Motion transfer pipeline complete!");
+    return json({ status: "DONE", video_url: videoSigned?.signedUrl, audio_url: audioSigned?.signedUrl, cost: totalCost });
   } catch (err: any) {
     console.error("[POLL ERROR]", err.message);
     return json({ error: err.message }, 500);

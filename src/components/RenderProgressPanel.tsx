@@ -1,4 +1,4 @@
-import { Loader2, Check, Music, Film, Upload } from "lucide-react";
+import { Loader2, Check } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
 interface ProgressInfo {
@@ -8,16 +8,15 @@ interface ProgressInfo {
 }
 
 const STEPS = [
-  { key: "tts_starting", label: "Iniciando TTS", pct: 5 },
-  { key: "tts_processing", label: "Procesando voz", pct: 15 },
-  { key: "tts_done", label: "Audio generado", pct: 25 },
-  { key: "video_starting", label: "Iniciando video", pct: 30 },
-  { key: "video_generating", label: "Generando video", pct: 55 },
-  { key: "uploading", label: "Subiendo archivos", pct: 90 },
+  { key: "uploading_reference", label: "Subiendo video de referencia", pct: 10 },
+  { key: "motion_starting", label: "Iniciando transferencia de movimiento", pct: 20 },
+  { key: "motion_transferring", label: "Transfiriendo movimiento (~3-5 min)", pct: 55 },
+  { key: "downloading", label: "Descargando resultado", pct: 80 },
+  { key: "uploading", label: "Subiendo video final", pct: 95 },
 ];
 
 const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
-  const currentStep = progress?.step || "tts_starting";
+  const currentStep = progress?.step || "uploading_reference";
   const currentIdx = STEPS.findIndex((s) => s.key === currentStep);
   const pct = currentIdx >= 0 ? STEPS[currentIdx].pct : 5;
 
@@ -26,7 +25,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
       <div className="flex items-center gap-2">
         <Loader2 className="w-4 h-4 animate-spin text-primary" />
         <span className="text-xs font-medium text-foreground">
-          {progress?.detail || "Preparando pipeline…"}
+          {progress?.detail || "Preparando transferencia de movimiento…"}
         </span>
       </div>
       <Progress value={pct} className="h-2" />
@@ -58,7 +57,7 @@ const RenderProgressPanel = ({ progress }: { progress?: ProgressInfo }) => {
         })}
       </div>
       <p className="text-[10px] text-muted-foreground text-center">
-        El video puede tardar ~3-5 minutos
+        Transferencia estructural de movimiento — misma duración y gestos del original
       </p>
     </div>
   );
