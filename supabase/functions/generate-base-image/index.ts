@@ -79,19 +79,19 @@ Deno.serve(async (req) => {
       attempts: 1,
     }).select().single();
 
-    // Get signed URL for the original video as reference
-    const videoStoragePath = `${userId}/${assetId}/video.mp4`;
-    const { data: videoSignedData } = await supabase.storage
+    // Get signed URL for the original video thumbnail as reference
+    const thumbPath = `${userId}/${assetId}/thumbnail.jpg`;
+    const { data: thumbSignedData } = await supabase.storage
       .from("ugc-assets")
-      .createSignedUrl(videoStoragePath, 60 * 30);
-    const videoRefUrl = videoSignedData?.signedUrl || null;
+      .createSignedUrl(thumbPath, 60 * 30);
+    const thumbRefUrl = thumbSignedData?.signedUrl || null;
 
     // Build the prompt
     const scenarioDesc = render.scenario_prompt || "natural UGC-style scene, person talking to camera";
     const intensityLabel = (render.emotional_intensity ?? 50) > 70 ? "high energy, very expressive" : (render.emotional_intensity ?? 50) > 40 ? "moderate, natural" : "calm, composed";
 
-    const imagePrompt = videoRefUrl
-      ? `Look at this reference video frame. Generate a NEW photo that replicates the EXACT same composition:
+    const imagePrompt = thumbRefUrl
+      ? `Look at this reference image (a frame from the original TikTok video). Generate a NEW photo that replicates the EXACT same composition:
 - Same camera distance and angle
 - Same type of background and setting
 - Same lighting conditions and color temperature
@@ -108,14 +108,14 @@ Expression/energy: ${intensityLabel}
 Format: Portrait 9:16, natural smartphone camera quality. Should look like a real selfie/video screenshot, NOT a professional studio photo.`;
 
     console.log("Generating image with Lovable AI (gemini-3-pro-image-preview)");
-    console.log("Has video reference:", !!videoRefUrl);
+    console.log("Has thumbnail reference:", !!thumbRefUrl);
 
     // Build messages for the AI
     const userContent: any[] = [];
-    if (videoRefUrl) {
+    if (thumbRefUrl) {
       userContent.push({
         type: "image_url",
-        image_url: { url: videoRefUrl },
+        image_url: { url: thumbRefUrl },
       });
     }
     userContent.push({ type: "text", text: imagePrompt });
@@ -195,7 +195,7 @@ Format: Portrait 9:16, natural smartphone camera quality. Should look like a rea
     // Update job
     await supabase.from("jobs").update({
       status: "DONE",
-      cost_json: { provider: "lovable_ai", model: "gemini-3-pro-image-preview", has_reference: !!videoRefUrl, estimated_cost: 0.05 },
+      cost_json: { provider: "lovable_ai", model: "gemini-3-pro-image-preview", has_reference: !!thumbRefUrl, estimated_cost: 0.05 },
     }).eq("id", job!.id);
 
     console.log("Base image generated successfully with Lovable AI");

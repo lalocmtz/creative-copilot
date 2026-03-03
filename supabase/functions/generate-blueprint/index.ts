@@ -89,22 +89,17 @@ serve(async (req) => {
       .select()
       .single();
 
-    // Generate signed URL for the stored video so Gemini can see it
-    let videoSignedUrl: string | null = null;
-    const videoUrl = asset.metadata_json?.video_url;
-    if (videoUrl && typeof videoUrl === "string") {
-      // Extract storage path from the signed URL or metadata
-      // The video is stored at {userId}/{assetId}/video.mp4
-      const storagePath = `${asset.user_id}/${asset_id}/video.mp4`;
-      const { data: signedData } = await supabaseAdmin.storage
-        .from("ugc-assets")
-        .createSignedUrl(storagePath, 60 * 30); // 30 min expiry
-      if (signedData?.signedUrl) {
-        videoSignedUrl = signedData.signedUrl;
-        console.log("Video signed URL generated for visual analysis");
-      } else {
-        console.log("Could not generate signed URL for video, falling back to text-only analysis");
-      }
+    // Generate signed URL for the stored thumbnail so Gemini can see it
+    let thumbnailSignedUrl: string | null = null;
+    const storagePath = `${asset.user_id}/${asset_id}/thumbnail.jpg`;
+    const { data: signedData } = await supabaseAdmin.storage
+      .from("ugc-assets")
+      .createSignedUrl(storagePath, 60 * 30); // 30 min expiry
+    if (signedData?.signedUrl) {
+      thumbnailSignedUrl = signedData.signedUrl;
+      console.log("Thumbnail signed URL generated for visual analysis");
+    } else {
+      console.log("No thumbnail available, falling back to text-only analysis");
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -112,7 +107,7 @@ serve(async (req) => {
       return json({ error: "LOVABLE_API_KEY not configured" }, 500);
     }
 
-    const systemPrompt = videoSignedUrl
+    const systemPrompt = thumbnailSignedUrl
       ? `Eres un estratega de contenido UGC experto en TikTok Shop. Estás viendo el VIDEO REAL que se debe replicar. Tu trabajo es analizar tanto el transcript como la COMPOSICIÓN VISUAL EXACTA del video.
 
 ANÁLISIS VISUAL CRÍTICO - Debes describir con precisión quirúrgica:
@@ -155,10 +150,10 @@ IMPORTANTE: El escenario sugerido debe ser un prompt extenso y detallado para ge
     // Build user content - include video frame if available
     const userContent: any[] = [];
 
-    if (videoSignedUrl) {
+    if (thumbnailSignedUrl) {
       userContent.push({
         type: "image_url",
-        image_url: { url: videoSignedUrl },
+        image_url: { url: thumbnailSignedUrl },
       });
       userContent.push({
         type: "text",
@@ -297,7 +292,7 @@ Responde usando la función analyze_transcript.`,
     const variationsJson = parsed.variations;
 
     // Estimate token cost
-    const inputTokens = Math.ceil(asset.transcript.length / 4) + (videoSignedUrl ? 1000 : 0);
+    const inputTokens = Math.ceil(asset.transcript.length / 4) + (thumbnailSignedUrl ? 1000 : 0);
     const outputTokens = Math.ceil(JSON.stringify(parsed).length / 4);
     const tokenCost = ((inputTokens * 0.00001) + (outputTokens * 0.00004));
 
@@ -333,7 +328,7 @@ Responde usando la función analyze_transcript.`,
         .from("jobs")
         .update({
           status: "DONE",
-          cost_json: { input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost: tokenCost, visual_analysis: !!videoSignedUrl },
+          cost_json: { input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost: tokenCost, visual_analysis: !!thumbnailSignedUrl },
         })
         .eq("id", job.id);
     }
