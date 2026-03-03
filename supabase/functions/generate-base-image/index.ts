@@ -102,11 +102,12 @@ Deno.serve(async (req) => {
     const systemPrompt = `You are a photorealistic image compositor specializing in UGC content. Your job is to create a photo where a person naturally holds a real product.
 
 ABSOLUTE RULES:
+- NEVER replicate the reference person's face. Generate a COMPLETELY DIFFERENT person with only similar demographic traits (age range, gender, build, facial hair style).
+- NEVER copy the exact room/background from the reference. Create a DIFFERENT environment of the same general type (e.g., if reference is a bedroom, create a DIFFERENT bedroom with different furniture, colors, and layout).
 - NEVER paste a flat mockup onto the image. The product must be reconstructed as a real 3D photographed object.
 - NEVER deform, add, or duplicate hands/fingers. Hands must look anatomically correct.
 - NEVER duplicate the product (only ONE instance).
 - NEVER add random objects (phones, other products) that weren't requested.
-- NEVER change the face/body/clothing if editing an existing person.
 - The product label/text must look printed and wrapped with realistic curvature — NOT flat or digitally overlaid.
 
 PHYSICAL COHERENCE RULES:
@@ -125,20 +126,20 @@ PHYSICAL COHERENCE RULES:
     let imageLabeling = "";
     if (hasThumb && hasProduct) {
       imageLabeling = `You are receiving TWO reference images:
-- IMAGE 1 (first image): Scene/composition reference from the original video. Copy the camera angle, distance, framing, background type, and lighting direction from this image.
+- IMAGE 1 (first image): Use as INSPIRATION ONLY for camera angle and distance. Do NOT copy the room, furniture, wall colors, or any identifiable background elements. Create a completely different environment of the same general type (indoor/outdoor).
 - IMAGE 2 (second image): The EXACT product the person must hold. Reconstruct this product as a real 3D object — study its shape, material, colors, label design, and texture.
 
 `;
     } else if (hasThumb) {
-      imageLabeling = `You are receiving ONE reference image: a scene/composition reference. Copy the camera angle, framing, and lighting.\n\n`;
+      imageLabeling = `You are receiving ONE reference image: a scene/composition reference. Use as INSPIRATION ONLY for camera angle and distance. Do NOT copy the room, furniture, or background details.\n\n`;
     } else if (hasProduct) {
       imageLabeling = `You are receiving ONE reference image: the product the person must hold. Reconstruct it as a real 3D object.\n\n`;
     }
 
     const imagePrompt = `${imageLabeling}Generate a NEW UGC-style photo with these requirements:
 
-PERSON: New person (different identity from reference), natural look, ${intensityLabel} expression.
-COMPOSITION: ${hasThumb ? "Match the exact camera distance, angle, background type, and framing from IMAGE 1." : scenarioDesc}
+PERSON: A COMPLETELY DIFFERENT person — different face, different hair, different skin tone variation. Only preserve broad traits: same gender, similar age range, similar build, similar facial hair style (if any). The person must NOT be recognizable as the same individual. Expression: ${intensityLabel}.
+COMPOSITION: ${hasThumb ? "Similar camera distance and framing style as IMAGE 1, but in a DIFFERENT room/location. Change wall color, furniture, floor, decorations. Keep the same general vibe (e.g., casual indoor) but make the space clearly distinct." : scenarioDesc}
 PRODUCT INTEGRATION (CRITICAL):
 - The person MUST be holding ${hasProduct ? "the EXACT product from IMAGE 2" : "a product"} in their hand, showing it naturally to the camera.
 - Reconstruct the product as a real photographed 3D object — NOT a flat mockup pasted on.
@@ -152,6 +153,8 @@ PRODUCT INTEGRATION (CRITICAL):
 SCENE: ${scenarioDesc}
 
 FORBIDDEN (do NOT include ANY of these):
+- Copying the reference person's face or distinctive features
+- Replicating the exact room, furniture placement, or background details from the reference
 - Flat/pasted mockup look, unrealistic glow around product
 - Extra fingers, deformed hands, extra hands
 - Duplicated products (only ONE)
