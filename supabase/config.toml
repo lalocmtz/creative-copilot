@@ -6,11 +6,14 @@ verify_jwt = false
 [functions.ingest-asset]
 verify_jwt = false
 
-[functions.generate-blueprint]
-verify_jwt = false
-
-[functions.generate-final-video]
-verify_jwt = false
-
 [functions.generate-base-image]
+verify_jwt = false
+
+[functions.animate-sora]
+verify_jwt = false
+
+[functions.poll-render-status]
+verify_jwt = false
+
+[functions.fetch-thumbnail]
 verify_jwt = false

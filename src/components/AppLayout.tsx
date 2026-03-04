@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/workspace", icon: Plus, label: "Nuevo Video" },
+  { to: "/assets/new", icon: Plus, label: "Nuevo Video" },
 ];
 
 const AppLayout = () => {
@@ -15,7 +15,6 @@ const AppLayout = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar */}
       <aside className="w-[220px] flex-shrink-0 border-r border-border bg-sidebar flex flex-col">
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-border">
           <div className="w-8 h-8 rounded-lg gradient-accent flex items-center justify-center">
@@ -32,9 +31,7 @@ const AppLayout = () => {
               end={item.to === "/"}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-200 ${
-                  isActive
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+                  isActive ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
                 }`
               }
             >
@@ -51,15 +48,9 @@ const AppLayout = () => {
               {credits?.remaining ?? "…"} <span className="text-muted-foreground font-normal">restantes</span>
             </p>
           </div>
-
-          <Button variant="outline" size="sm" className="w-full text-xs" disabled>
-            Comprar Más
-          </Button>
-
+          <Button variant="outline" size="sm" className="w-full text-xs" disabled>Comprar Más</Button>
           <div className="flex items-center gap-2 px-3">
-            <p className="text-xs text-muted-foreground truncate flex-1" title={user?.email ?? ""}>
-              {user?.email}
-            </p>
+            <p className="text-xs text-muted-foreground truncate flex-1" title={user?.email ?? ""}>{user?.email}</p>
             <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={signOut} title="Cerrar sesión">
               <LogOut className="w-3.5 h-3.5" />
             </Button>
@@ -67,7 +58,6 @@ const AppLayout = () => {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-y-auto">
         <Outlet />
       </main>
