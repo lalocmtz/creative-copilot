@@ -64,7 +64,7 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
   "kling-2.6/image-to-video": {
     id: "kling-2.6/image-to-video",
     buildInput: (url, prompt) => ({
-      image_urls: [url], prompt, sound: false, duration: "10",
+      image_urls: [url], prompt, sound: true, duration: "10",
     }),
   },
   "wan/2-6-image-to-video": {

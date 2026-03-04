@@ -2,6 +2,56 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
+/** Upload or remove product image for an asset */
+export const useUploadProductImage = () => {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ assetId, file }: { assetId: string; file: File | null }) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+      const userId = session.user.id;
+
+      if (!file) {
+        // Remove product image
+        const { data: asset } = await supabase.from("assets").select("metadata_json").eq("id", assetId).single();
+        const metadata = (asset?.metadata_json as any) || {};
+        delete metadata.product_image_url;
+        await supabase.from("assets").update({ metadata_json: metadata }).eq("id", assetId);
+        return { removed: true };
+      }
+
+      // Upload to storage
+      const ext = file.name.split(".").pop() || "jpg";
+      const storagePath = `${userId}/${assetId}/product.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from("ugc-assets").upload(storagePath, file, {
+        contentType: file.type, upsert: true,
+      });
+      if (uploadErr) throw new Error(uploadErr.message);
+
+      // Get signed URL (7 days)
+      const { data: signedData } = await supabase.storage.from("ugc-assets").createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+      const signedUrl = signedData?.signedUrl || "";
+
+      // Update metadata_json
+      const { data: asset } = await supabase.from("assets").select("metadata_json").eq("id", assetId).single();
+      const metadata = (asset?.metadata_json as any) || {};
+      metadata.product_image_url = signedUrl;
+      await supabase.from("assets").update({ metadata_json: metadata }).eq("id", assetId);
+
+      return { url: signedUrl };
+    },
+    onSuccess: (result, vars) => {
+      toast({ title: result.removed ? "Imagen eliminada" : "Imagen subida", description: result.removed ? "Se quitó la imagen del producto." : "El producto se usará en las imágenes base." });
+      queryClient.invalidateQueries({ queryKey: ["assets", vars.assetId] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+};
+
 /** Generate base image for a specific variant */
 export const useGenerateBaseImage = () => {
   const queryClient = useQueryClient();
