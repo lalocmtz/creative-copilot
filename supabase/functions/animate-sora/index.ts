@@ -142,7 +142,12 @@ async function createTaskWithTimeout(
   }
 }
 
-// ═══ TRY ALL MODELS (single pass, no inline backoff) ═══
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+// ═══ TRY ALL MODELS — with per-model retries + backoff for transient errors ═══
+const MAX_ATTEMPTS_PER_MODEL = 3;
+const INLINE_BACKOFFS = [1000, 2500, 5000]; // ms between retries
+
 async function tryAllModels(
   kieImageUrl: string,
   prompt: string,
@@ -157,23 +162,34 @@ async function tryAllModels(
 
   for (const model of I2V_MODELS) {
     if (failed.includes(model.id)) continue;
-    console.log(`[SORA] Trying: ${model.label} (${model.id})`);
 
-    const result = await createTaskWithTimeout(model, kieImageUrl, prompt, nFrames, apiKey, callbackUrl);
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+      console.log(`[SORA] ${model.label} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL}`);
 
-    if (result.taskId) {
-      console.log(`[SORA] ✅ ${model.label}: ${result.taskId}`);
-      return { taskId: result.taskId, modelUsed: model.label, failedModels: failed, lastError: "", lastErrorType: "TRANSIENT" };
+      const result = await createTaskWithTimeout(model, kieImageUrl, prompt, nFrames, apiKey, callbackUrl);
+
+      if (result.taskId) {
+        console.log(`[SORA] ✅ ${model.label}: ${result.taskId}`);
+        return { taskId: result.taskId, modelUsed: model.label, failedModels: failed, lastError: "", lastErrorType: "TRANSIENT" };
+      }
+
+      const errorType = classifyError(result.httpStatus, result.error || "");
+      console.warn(`[SORA] ❌ ${model.label} [${errorType}] attempt ${attempt}: ${result.error}`);
+      lastError = result.error || "Unknown error";
+      lastErrorType = errorType;
+
+      // FATAL → don't retry this model, move to next
+      if (errorType === "FATAL") break;
+
+      // TRANSIENT → backoff and retry same model
+      if (attempt < MAX_ATTEMPTS_PER_MODEL) {
+        const backoffMs = INLINE_BACKOFFS[attempt - 1] || 2000;
+        console.log(`[SORA] ⏳ Backoff ${backoffMs}ms before retry...`);
+        await sleep(backoffMs);
+      }
     }
 
-    const errorType = classifyError(result.httpStatus, result.error || "");
-    console.warn(`[SORA] ❌ ${model.label} [${errorType}]: ${result.error}`);
     failed.push(model.id);
-    lastError = result.error || "Unknown error";
-    lastErrorType = errorType;
-
-    // If FATAL (like 402 credits), skip to next model but don't retry this one
-    if (errorType === "FATAL") continue;
   }
 
   return { taskId: "", modelUsed: "", failedModels: failed, lastError, lastErrorType };
