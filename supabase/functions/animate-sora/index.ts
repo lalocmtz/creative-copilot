@@ -48,6 +48,35 @@ const I2V_MODELS: I2VModel[] = [
       character_id_list: [],
     }),
   },
+  {
+    id: "kling/v2-1-master-image-to-video",
+    label: "Kling V2.1 Master",
+    buildInput: (kieImageUrl, prompt) => ({
+      image_url: kieImageUrl,
+      prompt,
+      negative_prompt: "blurry, distorted, low quality, watermark, text overlay, extra limbs, artifacts",
+      cfg_scale: 0.5,
+      duration: "10",
+    }),
+  },
+  {
+    id: "wan-2.6-image-to-video",
+    label: "Wan 2.6",
+    buildInput: (kieImageUrl, prompt) => ({
+      image_url: kieImageUrl,
+      prompt,
+      ratio: "9:16",
+    }),
+  },
+  {
+    id: "bytedance-v1-pro-fast-image-to-video",
+    label: "Bytedance Fast",
+    buildInput: (kieImageUrl, prompt) => ({
+      image_url: kieImageUrl,
+      prompt,
+      aspect_ratio: "9:16",
+    }),
+  },
 ];
 
 async function tryCreateI2VTask(
@@ -79,7 +108,7 @@ async function tryCreateI2VTask(
       console.warn(`[SORA] ❌ ${model.label} exception: ${err.message}`);
     }
   }
-  throw new Error("All Sora models failed. Tried: " + models.map(m => m.label).join(", "));
+  throw new Error("All I2V models failed. Tried: " + models.map(m => m.label).join(", "));
 }
 
 Deno.serve(async (req) => {
@@ -155,11 +184,12 @@ Deno.serve(async (req) => {
     await supabase.from("jobs").update({
       provider_job_id: taskId,
       cost_json: {
-        _tasks: { kie_task_id: taskId, model_used: modelUsed, n_frames },
+        _tasks: { kie_task_id: taskId, model_used: modelUsed, model_id: modelUsed, n_frames, kie_image_url: kieImageUrl, video_prompt: videoMotionPrompt },
         _user_id: user.id,
         _asset_id: asset_id,
         _variant_id: variant_id,
         _started_at: new Date().toISOString(),
+        _failed_models: [],
       },
     }).eq("id", job!.id);
 

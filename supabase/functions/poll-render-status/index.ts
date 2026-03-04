@@ -14,7 +14,59 @@ function json(body: unknown, status = 200) {
 }
 
 const KIE_BASE = "https://api.kie.ai/api/v1";
+const KIE_FILE_UPLOAD = "https://kieai.redpandaai.co/api/file-url-upload";
 const TIMEOUT_MS = 5 * 60 * 1000;
+
+// ═══ SAME FALLBACK CHAIN AS animate-sora ═══
+const ALL_MODELS = [
+  "sora-2-pro-image-to-video",
+  "sora-2-image-to-video",
+  "kling/v2-1-master-image-to-video",
+  "wan-2.6-image-to-video",
+  "bytedance-v1-pro-fast-image-to-video",
+];
+
+interface ModelConfig {
+  id: string;
+  buildInput: (kieImageUrl: string, prompt: string, nFrames: string) => Record<string, unknown>;
+}
+
+const MODEL_CONFIGS: Record<string, ModelConfig> = {
+  "sora-2-pro-image-to-video": {
+    id: "sora-2-pro-image-to-video",
+    buildInput: (url, prompt, nFrames) => ({
+      image_urls: [url], prompt, aspect_ratio: "portrait", n_frames: nFrames,
+      size: "high", remove_watermark: true, character_id_list: [],
+    }),
+  },
+  "sora-2-image-to-video": {
+    id: "sora-2-image-to-video",
+    buildInput: (url, prompt, nFrames) => ({
+      image_urls: [url], prompt, aspect_ratio: "portrait", n_frames: nFrames,
+      remove_watermark: true, character_id_list: [],
+    }),
+  },
+  "kling/v2-1-master-image-to-video": {
+    id: "kling/v2-1-master-image-to-video",
+    buildInput: (url, prompt) => ({
+      image_url: url, prompt,
+      negative_prompt: "blurry, distorted, low quality, watermark, text overlay, extra limbs, artifacts",
+      cfg_scale: 0.5, duration: "10",
+    }),
+  },
+  "wan-2.6-image-to-video": {
+    id: "wan-2.6-image-to-video",
+    buildInput: (url, prompt) => ({
+      image_url: url, prompt, ratio: "9:16",
+    }),
+  },
+  "bytedance-v1-pro-fast-image-to-video": {
+    id: "bytedance-v1-pro-fast-image-to-video",
+    buildInput: (url, prompt) => ({
+      image_url: url, prompt, aspect_ratio: "9:16",
+    }),
+  },
+};
 
 async function checkTask(taskId: string, apiKey: string) {
   const res = await fetch(`${KIE_BASE}/jobs/recordInfo?taskId=${taskId}`, {
@@ -39,6 +91,44 @@ async function getDownloadUrl(fileUrl: string, apiKey: string): Promise<string> 
   const result = await res.json();
   if (result.code !== 200) throw new Error(`Download URL error: ${result.msg}`);
   return result.data;
+}
+
+// ═══ CONTINGENCY: create a new task with next model ═══
+async function retryWithNextModel(
+  failedModelId: string,
+  failedModels: string[],
+  kieImageUrl: string,
+  prompt: string,
+  nFrames: string,
+  apiKey: string,
+): Promise<{ taskId: string; modelUsed: string } | null> {
+  const allFailed = [...failedModels, failedModelId];
+  const remaining = ALL_MODELS.filter(m => !allFailed.includes(m));
+
+  for (const modelId of remaining) {
+    const config = MODEL_CONFIGS[modelId];
+    if (!config) continue;
+    console.log(`[CONTINGENCY] Trying fallback: ${modelId}`);
+    try {
+      const input = config.buildInput(kieImageUrl, prompt, nFrames);
+      const res = await fetch(`${KIE_BASE}/jobs/createTask`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: config.id, input }),
+      });
+      const data = await res.json();
+      if (data.code === 200 && data.data?.taskId) {
+        console.log(`[CONTINGENCY] ✅ ${modelId} accepted: ${data.data.taskId}`);
+        return { taskId: data.data.taskId, modelUsed: modelId };
+      }
+      console.warn(`[CONTINGENCY] ❌ ${modelId} rejected: ${data.msg || JSON.stringify(data)}`);
+      allFailed.push(modelId);
+    } catch (err: any) {
+      console.warn(`[CONTINGENCY] ❌ ${modelId} exception: ${err.message}`);
+      allFailed.push(modelId);
+    }
+  }
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -96,20 +186,59 @@ Deno.serve(async (req) => {
     console.log(`[POLL] Checking task: ${taskId}`);
     const taskStatus = await checkTask(taskId, KIE_API_KEY);
 
+    // ═══ CONTINGENCY PROTOCOL: on fail, try next model ═══
     if (taskStatus.state === "fail") {
-      await supabase.from("jobs").update({ status: "FAILED", error_message: taskStatus.failMsg || "Sora failed" }).eq("id", job.id);
-      return json({ status: "FAILED", detail: taskStatus.failMsg || "Animation failed" });
+      const currentModel = costJson?._tasks?.model_used || costJson?._tasks?.model_id || "sora-2-pro-image-to-video";
+      const previouslyFailed: string[] = costJson?._failed_models || [];
+      console.log(`[CONTINGENCY] Model ${currentModel} failed: ${taskStatus.failMsg}. Trying next...`);
+
+      // We need the KIE image URL and prompt from the job
+      const kieImageUrl = costJson?._tasks?.kie_image_url;
+      const videoPrompt = costJson?._tasks?.video_prompt;
+      const nFrames = costJson?._tasks?.n_frames || "15";
+
+      if (kieImageUrl && videoPrompt) {
+        const retry = await retryWithNextModel(currentModel, previouslyFailed, kieImageUrl, videoPrompt, nFrames, KIE_API_KEY);
+
+        if (retry) {
+          // Update job with new task info, keep it RUNNING
+          await supabase.from("jobs").update({
+            provider_job_id: retry.taskId,
+            cost_json: {
+              ...costJson,
+              _tasks: { ...costJson._tasks, kie_task_id: retry.taskId, model_used: retry.modelUsed },
+              _failed_models: [...previouslyFailed, currentModel],
+              _started_at: new Date().toISOString(), // reset timeout
+            },
+          }).eq("id", job.id);
+
+          return json({
+            status: "RENDERING",
+            detail: `Modelo ${currentModel} falló. Contingencia activada: ${retry.modelUsed}`,
+            contingency: true,
+            new_model: retry.modelUsed,
+          });
+        }
+      }
+
+      // All models exhausted
+      await supabase.from("jobs").update({
+        status: "FAILED",
+        error_message: `All models failed. Last: ${currentModel}. ${taskStatus.failMsg || ""}`,
+      }).eq("id", job.id);
+      return json({ status: "FAILED", detail: "Todos los modelos fallaron. " + (taskStatus.failMsg || "") });
     }
 
     if (taskStatus.state !== "success") {
-      return json({ status: "RENDERING", detail: "Animando con Sora2…" });
+      const modelLabel = costJson?._tasks?.model_used || "Sora2";
+      return json({ status: "RENDERING", detail: `Animando con ${modelLabel}…` });
     }
 
     // ═══ SUCCESS — download and save ═══
-    console.log("[POLL] Sora task complete! Finalizing...");
+    console.log("[POLL] Task complete! Finalizing...");
 
     const videoFileUrl = taskStatus.resultJson?.resultUrls?.[0] || taskStatus.resultJson?.url;
-    if (!videoFileUrl) throw new Error("Sora returned no video URL");
+    if (!videoFileUrl) throw new Error("Provider returned no video URL");
 
     const videoDownloadUrl = await getDownloadUrl(videoFileUrl, KIE_API_KEY);
     const videoBuffer = await (await fetch(videoDownloadUrl)).arrayBuffer();
@@ -129,7 +258,6 @@ Deno.serve(async (req) => {
       variants[variantIndex] = { ...variants[variantIndex], final_video_url: finalVideoUrl };
     }
 
-    // Check if all variants with approved images are done
     const allDone = variants.every((v: any) => !v.base_image_approved || v.final_video_url);
 
     await supabase.from("assets").update({
@@ -138,9 +266,10 @@ Deno.serve(async (req) => {
     }).eq("id", asset_id);
 
     // Mark job done
+    const modelUsed = costJson?._tasks?.model_used || "unknown";
     await supabase.from("jobs").update({
       status: "DONE",
-      cost_json: { ...costJson, total_usd: 0.08 },
+      cost_json: { ...costJson, total_usd: 0.08, final_model: modelUsed },
     }).eq("id", job.id);
 
     // Deduct credit
@@ -153,8 +282,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log("[POLL] Pipeline complete!");
-    return json({ status: "DONE", video_url: finalVideoUrl });
+    console.log(`[POLL] Pipeline complete! Model: ${modelUsed}`);
+    return json({ status: "DONE", video_url: finalVideoUrl, model_used: modelUsed });
   } catch (err: any) {
     console.error("[POLL ERROR]", err.message);
     return json({ error: err.message }, 500);
