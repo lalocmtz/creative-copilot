@@ -1,54 +1,61 @@
 
 
-# Plan: Fix Video Generation — Correct Model IDs + Add More Fallbacks
+# Plan: Product Image Upload + Audio Fix
 
-## Root Cause (from edge function logs)
+## What we know
 
-The logs tell the full story:
+1. **Product image**: Currently nowhere in the flow. The `generate-base-image` edge function takes a thumbnail reference + `image_prompt` but never receives a product image. The user wants to upload a product photo (drag/drop or paste) on the VariantsPage **before** generating base images, so the AI compositor can render the person holding that specific product realistically.
 
-```text
-[CONTINGENCY] ❌ kling/v2-1-master-image-to-video: Credits insufficient
-[CONTINGENCY] ❌ wan-2.6-image-to-video: model name not supported
-[CONTINGENCY] ❌ bytedance-v1-pro-fast-image-to-video: model name not supported
-```
+2. **Audio**: The generated videos have no audio because:
+   - Kling 2.6 explicitly sets `sound: false`
+   - Most I2V models in the chain don't generate audio by default
+   - There's no TTS step being triggered after video generation
+   - The system has ElevenLabs configured but never calls it in the animate flow
 
-**3 of 5 fallback models are broken:**
-- Wan 2.6: wrong model ID (we use `wan-2.6-image-to-video`, correct is `wan/2-6-image-to-video`)
-- Bytedance: wrong model ID (we use `bytedance-v1-pro-fast-image-to-video`, correct is `bytedance/seedance-1.5-pro`)
-- Kling V2.1: wrong model ID (`kling/v2-1-master-image-to-video`, correct is `kling-2.6/image-to-video`) AND credits issue on KIE account
+## Changes (minimal — nothing else moves)
 
-The input schemas are also wrong — Wan and Kling 2.6 use `image_urls` (array), not `image_url` (string). Bytedance Seedance uses `input_urls` (array).
+### 1. Product Image Upload on VariantsPage
 
-## Changes
+**Frontend (`src/pages/VariantsPage.tsx`)**:
+- Add a product image upload section **above** the "Generar las 3 imagenes base" button
+- Support drag-and-drop + click-to-upload + paste from clipboard
+- Upload the image to Supabase Storage at `{user_id}/{asset_id}/product.jpg`
+- Save the signed URL to `assets.metadata_json.product_image_url`
+- Show a thumbnail preview with a remove/replace option
+- Disable "Generar imagenes" until product image is uploaded (optional — allow generation without product too)
 
-### 1. Fix `animate-sora/index.ts` — Correct all model IDs + inputs
+**Backend (`supabase/functions/generate-base-image/index.ts`)**:
+- Read `product_image_url` from `asset.metadata_json`
+- If present, include it as an additional `image_url` in the AI prompt content array
+- Enhance the system prompt with product integration instructions:
+  ```
+  PRODUCT INTEGRATION RULES:
+  - The person MUST be holding/using the product naturally
+  - Product must have correct perspective, scale, and lighting matching the scene
+  - Fingers must wrap around the product with natural occlusion (fingers in front)
+  - Add contact shadows between hand and product
+  - Labels/text on product must follow surface curvature
+  - Specular highlights must match scene lighting direction
+  - Product should look like a real 3D photographed object, NOT a flat paste
+  ```
 
-Replace the `I2V_MODELS` array with verified models from KIE docs:
+**New hook function** in `src/hooks/useVariants.ts`:
+- `useUploadProductImage()` mutation: uploads file to storage, updates `metadata_json.product_image_url`
 
-```text
-Fallback chain (5 models, all verified):
-1. sora-2-pro-image-to-video  → image_urls: [url], aspect_ratio, n_frames
-2. sora-2-image-to-video       → image_urls: [url], aspect_ratio, n_frames  
-3. kling-2.6/image-to-video    → image_urls: [url], prompt, sound: false, duration: "10"
-4. wan/2-6-image-to-video      → image_urls: [url], prompt, duration: "10", resolution: "720p"
-5. hailuo/02-image-to-video-pro → image_url: url (string), prompt
-6. bytedance/seedance-1.5-pro  → input_urls: [url], prompt
-```
+### 2. Audio Fix — Enable Sound on KIE Models
 
-6 models now (added Hailuo Pro as position 5). Each with the exact `buildInput` matching KIE's documented API schema.
+**Backend (`supabase/functions/animate-sora/index.ts`)**:
+- Kling 2.6: change `sound: false` to `sound: true` — Kling supports native audio generation
+- Sora models: add `with_audio: true` if supported by the API schema
+- This is the simplest fix — KIE models that support sound will generate it natively
 
-### 2. Fix `poll-render-status/index.ts` — Same model ID corrections
+**Backend (`supabase/functions/poll-render-status/index.ts`)**:
+- Same change: update the contingency model configs to match (sound: true for Kling)
 
-Update `ALL_MODELS` list and `MODEL_CONFIGS` with the same corrected IDs and input builders, so contingency retries during rendering also use correct models.
-
-### 3. Both files: retry logic in contingency
-
-The `retryWithNextModel` function currently tries each remaining model once with no retry. Add per-model retry with backoff (same as `tryAllModels` does), so contingency is equally resilient.
-
-## Files to Modify
-- `supabase/functions/animate-sora/index.ts` — fix I2V_MODELS array
-- `supabase/functions/poll-render-status/index.ts` — fix ALL_MODELS + MODEL_CONFIGS
-
-## Important Note for User
-Your KIE account may have insufficient credits for some models (Kling showed "Credits insufficient"). Top up your KIE account balance to ensure all fallback models are available. With the corrected model IDs, at minimum Wan 2.6 and Bytedance Seedance should work immediately.
+### Files to modify
+- `src/pages/VariantsPage.tsx` — add product image upload UI
+- `src/hooks/useVariants.ts` — add `useUploadProductImage` hook
+- `supabase/functions/generate-base-image/index.ts` — include product image in AI prompt
+- `supabase/functions/animate-sora/index.ts` — enable sound on models that support it
+- `supabase/functions/poll-render-status/index.ts` — sync sound settings in contingency configs
 
