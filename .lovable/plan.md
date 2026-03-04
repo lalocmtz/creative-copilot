@@ -1,44 +1,54 @@
 
 
-# Plan: Fix Stuck Rendering — Diagnostic Logging + Faster Timeouts
+# Plan: Fix Video Generation — Correct Model IDs + Add More Fallbacks
 
-## Problem
-The poll-render-status function checks KIE task status every 5 seconds but **never logs the response**. We have zero visibility into what KIE returns. Additionally, the kie-callback webhook has **zero logs** — KIE is not sending callbacks, so we rely entirely on polling. The 8-minute timeout is too long.
+## Root Cause (from edge function logs)
+
+The logs tell the full story:
+
+```text
+[CONTINGENCY] ❌ kling/v2-1-master-image-to-video: Credits insufficient
+[CONTINGENCY] ❌ wan-2.6-image-to-video: model name not supported
+[CONTINGENCY] ❌ bytedance-v1-pro-fast-image-to-video: model name not supported
+```
+
+**3 of 5 fallback models are broken:**
+- Wan 2.6: wrong model ID (we use `wan-2.6-image-to-video`, correct is `wan/2-6-image-to-video`)
+- Bytedance: wrong model ID (we use `bytedance-v1-pro-fast-image-to-video`, correct is `bytedance/seedance-1.5-pro`)
+- Kling V2.1: wrong model ID (`kling/v2-1-master-image-to-video`, correct is `kling-2.6/image-to-video`) AND credits issue on KIE account
+
+The input schemas are also wrong — Wan and Kling 2.6 use `image_urls` (array), not `image_url` (string). Bytedance Seedance uses `input_urls` (array).
 
 ## Changes
 
-### 1. Add diagnostic logging to `poll-render-status/index.ts`
+### 1. Fix `animate-sora/index.ts` — Correct all model IDs + inputs
 
-After `checkTask()` (line 399), log the actual KIE response:
-```typescript
-console.log(`[POLL] Task ${taskId} state: ${taskStatus.state}, failMsg: ${taskStatus.failMsg || "none"}`);
+Replace the `I2V_MODELS` array with verified models from KIE docs:
+
+```text
+Fallback chain (5 models, all verified):
+1. sora-2-pro-image-to-video  → image_urls: [url], aspect_ratio, n_frames
+2. sora-2-image-to-video       → image_urls: [url], aspect_ratio, n_frames  
+3. kling-2.6/image-to-video    → image_urls: [url], prompt, sound: false, duration: "10"
+4. wan/2-6-image-to-video      → image_urls: [url], prompt, duration: "10", resolution: "720p"
+5. hailuo/02-image-to-video-pro → image_url: url (string), prompt
+6. bytedance/seedance-1.5-pro  → input_urls: [url], prompt
 ```
 
-Also wrap the `checkTask` call in try/catch to handle silent network failures — if checkTask throws, log the error and keep polling instead of crashing with 500.
+6 models now (added Hailuo Pro as position 5). Each with the exact `buildInput` matching KIE's documented API schema.
 
-### 2. Reduce timeout from 8 min to 5 min
+### 2. Fix `poll-render-status/index.ts` — Same model ID corrections
 
-Change `TIMEOUT_MS` from `8 * 60 * 1000` to `5 * 60 * 1000`. Sora 2 Pro takes 1-3 min typically. 5 min is generous enough while avoiding long waits.
+Update `ALL_MODELS` list and `MODEL_CONFIGS` with the same corrected IDs and input builders, so contingency retries during rendering also use correct models.
 
-### 3. Handle ALL failure states in contingency (not just transient)
+### 3. Both files: retry logic in contingency
 
-Currently line 402-430: contingency only triggers for `isTransientFailure`. But if Sora Pro fails for ANY reason during rendering, we should try the next model. Change logic so ALL rendering failures trigger the fallback chain (not just "heavy load" messages).
+The `retryWithNextModel` function currently tries each remaining model once with no retry. Add per-model retry with backoff (same as `tryAllModels` does), so contingency is equally resilient.
 
-### 4. Fix callback URL — ensure `kie-callback` is deployed and reachable
+## Files to Modify
+- `supabase/functions/animate-sora/index.ts` — fix I2V_MODELS array
+- `supabase/functions/poll-render-status/index.ts` — fix ALL_MODELS + MODEL_CONFIGS
 
-Verify the callback function is in `supabase/config.toml`. Add a health-check log on boot so we can confirm deployment.
-
-### 5. Add elapsed time to polling response
-
-Return `elapsed_seconds` in the polling response so the UI can show "Animando… (45s)" giving the user visibility that progress is happening.
-
-### Files to modify
-- `supabase/functions/poll-render-status/index.ts` — logging, timeout, contingency logic, elapsed time
-- `src/pages/RenderPage.tsx` — show elapsed time in progress panel
-
-## Expected Result
-- Logs will show exactly what KIE returns on each poll
-- Faster failover (5 min instead of 8)
-- Any rendering failure triggers contingency (not just transient)
-- User sees elapsed time so they know it's not stuck
+## Important Note for User
+Your KIE account may have insufficient credits for some models (Kling showed "Credits insufficient"). Top up your KIE account balance to ensure all fallback models are available. With the corrected model IDs, at minimum Wan 2.6 and Bytedance Seedance should work immediately.
 
