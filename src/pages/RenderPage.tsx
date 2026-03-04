@@ -25,6 +25,7 @@ const RenderPage = () => {
   const [isRendering, setIsRendering] = useState(false);
   const [renderDetail, setRenderDetail] = useState<string>("");
   const [renderStatus, setRenderStatus] = useState<string>("");
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const variants = (asset?.variants_json as any[]) || [];
@@ -50,6 +51,7 @@ const RenderPage = () => {
         onSuccess: (data) => {
           setRenderDetail(data.detail || "");
           setRenderStatus(data.status || "");
+          if (data.elapsed_seconds != null) setElapsedSeconds(data.elapsed_seconds);
 
           if (data.status === "DONE") {
             setIsRendering(false);
@@ -202,6 +204,9 @@ const RenderPage = () => {
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {renderDetail || "Te avisamos en cuanto esté listo."}
+                    {!isQueued && elapsedSeconds > 0 && (
+                      <span className="ml-2 text-primary font-medium">({elapsedSeconds}s)</span>
+                    )}
                   </p>
                 </div>
               </div>

@@ -15,7 +15,7 @@ function json(body: unknown, status = 200) {
 
 const KIE_BASE = "https://api.kie.ai/api/v1";
 const KIE_FILE_UPLOAD = "https://kieai.redpandaai.co/api/file-url-upload";
-const TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes
+const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 // ═══ ERROR CLASSIFICATION ═══
 const TRANSIENT_MESSAGES = ["heavy load", "not responding", "try again later", "temporarily unavailable", "rate limit"];
@@ -396,40 +396,51 @@ Deno.serve(async (req) => {
 
     // Check KIE task
     console.log(`[POLL] Checking task: ${taskId}`);
-    const taskStatus = await checkTask(taskId, KIE_API_KEY);
+    
+    let taskStatus: { state: string; resultJson: any; failMsg: string | null };
+    try {
+      taskStatus = await checkTask(taskId, KIE_API_KEY);
+    } catch (pollErr: any) {
+      // Network/parse error checking KIE — don't crash, just report still rendering
+      console.error(`[POLL] checkTask exception: ${pollErr.message}`);
+      const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
+      const modelLabel = costJson?._tasks?.model_used || "Sora2";
+      return json({ status: "RENDERING", detail: `Animando con ${modelLabel}… (verificando)`, elapsed_seconds: Math.round(elapsedMs / 1000) });
+    }
 
-    // ═══ TASK FAILED — contingency ═══
+    // ═══ DIAGNOSTIC LOG ═══
+    console.log(`[POLL] Task ${taskId} state: ${taskStatus.state}, failMsg: ${taskStatus.failMsg || "none"}`);
+
+    // ═══ TASK FAILED — contingency (ANY failure, not just transient) ═══
     if (taskStatus.state === "fail") {
       const failMsg = taskStatus.failMsg || "";
-      console.log(`[POLL] Task failed: ${failMsg}`);
+      console.log(`[POLL] Task failed: ${failMsg} — triggering contingency for ALL failures`);
 
-      if (isTransientFailure(failMsg)) {
-        // Transient failure during rendering — try next model
-        const failedModels: string[] = [...(costJson?._failed_models || [])];
-        const currentModel = costJson?._tasks?.model_used || costJson?._tasks?.model_id || "";
-        if (currentModel && !failedModels.includes(currentModel)) failedModels.push(currentModel);
+      // Try next model for ANY failure
+      const failedModels: string[] = [...(costJson?._failed_models || [])];
+      const currentModel = costJson?._tasks?.model_used || costJson?._tasks?.model_id || "";
+      if (currentModel && !failedModels.includes(currentModel)) failedModels.push(currentModel);
 
-        const kieImageUrl = costJson?._tasks?.kie_image_url;
-        const videoPrompt = costJson?._tasks?.video_prompt;
-        const nFrames = costJson?._tasks?.n_frames || "10";
+      const kieImageUrl = costJson?._tasks?.kie_image_url;
+      const videoPrompt = costJson?._tasks?.video_prompt;
+      const nFrames = costJson?._tasks?.n_frames || "10";
 
-        if (kieImageUrl && videoPrompt) {
-          const retry = await retryWithNextModel(failedModels, kieImageUrl, videoPrompt, nFrames, KIE_API_KEY, callbackUrl);
-          if (retry) {
-            await supabase.from("jobs").update({
-              provider_job_id: retry.taskId,
-              cost_json: {
-                ...costJson,
-                _tasks: { ...costJson._tasks, kie_task_id: retry.taskId, model_used: retry.modelUsed },
-                _failed_models: failedModels, _started_at: new Date().toISOString(),
-              },
-            }).eq("id", job.id);
-            return json({ status: "RENDERING", detail: `Contingencia activada: ${retry.modelUsed}`, contingency: true });
-          }
+      if (kieImageUrl && videoPrompt) {
+        const retry = await retryWithNextModel(failedModels, kieImageUrl, videoPrompt, nFrames, KIE_API_KEY, callbackUrl);
+        if (retry) {
+          await supabase.from("jobs").update({
+            provider_job_id: retry.taskId,
+            cost_json: {
+              ...costJson,
+              _tasks: { ...costJson._tasks, kie_task_id: retry.taskId, model_used: retry.modelUsed },
+              _failed_models: failedModels, _started_at: new Date().toISOString(),
+            },
+          }).eq("id", job.id);
+          return json({ status: "RENDERING", detail: `Contingencia activada: ${retry.modelUsed}`, contingency: true });
         }
       }
 
-      // Non-transient or all models exhausted
+      // All models exhausted
       const reservationId = costJson?._reservation_id;
       if (reservationId) await supabase.from("credit_reservations").update({ status: "RELEASED", updated_at: new Date().toISOString() }).eq("id", reservationId);
       await supabase.from("jobs").update({ status: "FAILED_PROVIDER", error_message: failMsg }).eq("id", job.id);
@@ -438,7 +449,8 @@ Deno.serve(async (req) => {
 
     if (taskStatus.state !== "success") {
       const modelLabel = costJson?._tasks?.model_used || "Sora2";
-      return json({ status: "RENDERING", detail: `Animando con ${modelLabel}…` });
+      const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
+      return json({ status: "RENDERING", detail: `Animando con ${modelLabel}…`, elapsed_seconds: Math.round(elapsedMs / 1000) });
     }
 
     // ═══ SUCCESS ═══
