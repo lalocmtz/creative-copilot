@@ -68,7 +68,24 @@ Deno.serve(async (req) => {
     const thumbPath = `${user.id}/${asset_id}/thumbnail.jpg`;
     const { data: thumbSigned } = await supabase.storage.from("ugc-assets").createSignedUrl(thumbPath, 1800);
 
+    // Check for product image
+    const metadata = (asset.metadata_json as any) || {};
+    const productImageUrl = metadata.product_image_url;
+
     // Build prompt
+    const hasProduct = !!productImageUrl;
+    const productRules = hasProduct ? `
+
+PRODUCT INTEGRATION RULES (CRITICAL — a product reference image is provided):
+- The person MUST be holding/using the product naturally in their hands
+- Product must have correct perspective, scale, and lighting matching the scene
+- Fingers must wrap around the product with natural occlusion (fingers visible in front of the product)
+- Add contact shadows between hand and product
+- Labels/text on product must follow surface curvature, not appear flat
+- Specular highlights on product must match scene lighting direction
+- Product should look like a real 3D photographed object, NOT a flat paste or cutout
+- Use the provided product image ONLY as visual reference for appearance — reconstruct it in the scene with proper 3D integration` : "";
+
     const systemPrompt = `You are a photorealistic image compositor for UGC TikTok Shop content.
 
 RULES:
@@ -79,11 +96,15 @@ RULES:
 - Match lighting, add contact shadows, realistic specular highlights
 - Portrait 9:16, natural smartphone camera quality with subtle grain
 - Must look like a real person filmed this on their phone
-- NO CGI look, NO studio photography, NO watermarks`;
+- NO CGI look, NO studio photography, NO watermarks${productRules}`;
 
     const userContent: any[] = [];
     if (thumbSigned?.signedUrl) {
       userContent.push({ type: "image_url", image_url: { url: thumbSigned.signedUrl } });
+    }
+    if (productImageUrl) {
+      userContent.push({ type: "image_url", image_url: { url: productImageUrl } });
+      userContent.push({ type: "text", text: "The image above is the PRODUCT that the person must be holding/using naturally. Integrate it realistically." });
     }
     userContent.push({ type: "text", text: imagePrompt });
 

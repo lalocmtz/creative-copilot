@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAsset } from "@/hooks/useSupabaseQueries";
-import { useGenerateBaseImage, useApproveVariantImage, useGenerateAllBaseImages } from "@/hooks/useVariants";
+import { useGenerateBaseImage, useApproveVariantImage, useGenerateAllBaseImages, useUploadProductImage } from "@/hooks/useVariants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import StatusBadge from "@/components/StatusBadge";
-import { Loader2, Image, Check, ArrowRight, Wand2, Film } from "lucide-react";
+import { Loader2, Image, Check, ArrowRight, Wand2, Film, Upload, X, Package } from "lucide-react";
 import { motion } from "framer-motion";
 
 const BEAT_COLORS: Record<string, string> = {
@@ -22,7 +22,33 @@ const VariantsPage = () => {
   const generateImage = useGenerateBaseImage();
   const approveImage = useApproveVariantImage();
   const generateAll = useGenerateAllBaseImages();
+  const uploadProduct = useUploadProductImage();
   const [activeTab, setActiveTab] = useState("A");
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    uploadProduct.mutate({ assetId: id!, file }, { onSuccess: () => refetch() });
+  }, [id, uploadProduct, refetch]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFileUpload(file);
+  }, [handleFileUpload]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) handleFileUpload(file);
+        break;
+      }
+    }
+  }, [handleFileUpload]);
 
   if (isLoading) return <div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   if (!asset) return <div className="p-8 text-center text-muted-foreground">Asset no encontrado</div>;
@@ -34,6 +60,9 @@ const VariantsPage = () => {
       <Link to="/assets/new"><Button className="mt-4">Crear nueva ingesta</Button></Link>
     </div>
   );
+
+  const metadata = (asset.metadata_json as any) || {};
+  const productImageUrl = metadata.product_image_url;
 
   const handleGenerateImage = (variantId: string) => {
     generateImage.mutate({ assetId: id!, variantId }, { onSuccess: () => refetch() });
@@ -48,16 +77,78 @@ const VariantsPage = () => {
     generateAll.mutate({ assetId: id!, variantIds: ids }, { onSuccess: () => refetch() });
   };
 
+  const handleRemoveProduct = () => {
+    uploadProduct.mutate({ assetId: id!, file: null }, { onSuccess: () => refetch() });
+  };
+
   const anyApproved = variants.some((v: any) => v.base_image_approved);
 
   return (
-    <div className="p-6 md:p-8 max-w-3xl mx-auto space-y-6">
+    <div className="p-6 md:p-8 max-w-3xl mx-auto space-y-6" onPaste={handlePaste}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">Variantes A/B/C</h1>
-          <p className="text-sm text-muted-foreground mt-1">Genera una imagen base antes de animar.</p>
+          <p className="text-sm text-muted-foreground mt-1">Sube la imagen del producto y genera imágenes base.</p>
         </div>
         <StatusBadge status={asset.status} />
+      </div>
+
+      {/* Product Image Upload */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
+          <Package className="w-4 h-4" /> Imagen del Producto
+        </h3>
+        {productImageUrl ? (
+          <div className="relative inline-block">
+            <div className="rounded-lg overflow-hidden border border-border bg-card w-32 h-32">
+              <img src={productImageUrl} alt="Producto" className="w-full h-full object-contain" />
+            </div>
+            <button
+              onClick={handleRemoveProduct}
+              className="absolute -top-2 -right-2 rounded-full bg-destructive text-destructive-foreground w-6 h-6 flex items-center justify-center hover:bg-destructive/80 transition-colors"
+              disabled={uploadProduct.isPending}
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        ) : (
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition-colors ${
+              dragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 bg-card"
+            }`}
+          >
+            {uploadProduct.isPending ? (
+              <div className="flex flex-col items-center gap-2">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Subiendo…</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <Upload className="w-8 h-8 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  Arrastra, pega (Ctrl+V) o haz clic para subir
+                </p>
+                <p className="text-xs text-muted-foreground/60">
+                  La IA integrará el producto de forma realista en las imágenes
+                </p>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Batch action */}

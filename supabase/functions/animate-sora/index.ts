@@ -74,7 +74,7 @@ const I2V_MODELS: I2VModel[] = [
     id: "kling-2.6/image-to-video",
     label: "Kling 2.6",
     buildInput: (url, prompt) => ({
-      image_urls: [url], prompt, sound: false, duration: "10",
+      image_urls: [url], prompt, sound: true, duration: "10",
     }),
   },
   {
