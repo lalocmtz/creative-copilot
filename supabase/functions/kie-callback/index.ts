@@ -27,6 +27,7 @@ async function getDownloadUrl(fileUrl: string, apiKey: string): Promise<string> 
 }
 
 Deno.serve(async (req) => {
+  console.log(`[KIE-CALLBACK] Boot OK — ${req.method} received`);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
