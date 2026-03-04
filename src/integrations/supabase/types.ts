@@ -17,6 +17,8 @@ export type Database = {
       assets: {
         Row: {
           created_at: string
+          credits_estimate_json: Json | null
+          error_json: Json | null
           id: string
           metadata_json: Json | null
           rights_confirmed: boolean
@@ -24,10 +26,14 @@ export type Database = {
           source_url: string
           status: Database["public"]["Enums"]["asset_status"]
           transcript: string | null
+          understanding_json: Json | null
           user_id: string
+          variants_json: Json | null
         }
         Insert: {
           created_at?: string
+          credits_estimate_json?: Json | null
+          error_json?: Json | null
           id?: string
           metadata_json?: Json | null
           rights_confirmed?: boolean
@@ -35,10 +41,14 @@ export type Database = {
           source_url: string
           status?: Database["public"]["Enums"]["asset_status"]
           transcript?: string | null
+          understanding_json?: Json | null
           user_id: string
+          variants_json?: Json | null
         }
         Update: {
           created_at?: string
+          credits_estimate_json?: Json | null
+          error_json?: Json | null
           id?: string
           metadata_json?: Json | null
           rights_confirmed?: boolean
@@ -46,7 +56,9 @@ export type Database = {
           source_url?: string
           status?: Database["public"]["Enums"]["asset_status"]
           transcript?: string | null
+          understanding_json?: Json | null
           user_id?: string
+          variants_json?: Json | null
         }
         Relationships: []
       }
@@ -134,6 +146,7 @@ export type Database = {
           status: Database["public"]["Enums"]["job_status"]
           type: Database["public"]["Enums"]["job_type"]
           updated_at: string
+          variant_id: string | null
         }
         Insert: {
           asset_id: string
@@ -148,6 +161,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["job_status"]
           type: Database["public"]["Enums"]["job_type"]
           updated_at?: string
+          variant_id?: string | null
         }
         Update: {
           asset_id?: string
@@ -162,6 +176,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["job_status"]
           type?: Database["public"]["Enums"]["job_type"]
           updated_at?: string
+          variant_id?: string | null
         }
         Relationships: [
           {
@@ -281,6 +296,14 @@ export type Database = {
         | "IMAGE_APPROVED"
         | "VIDEO_RENDERED"
         | "FAILED"
+        | "DOWNLOADING"
+        | "DOWNLOADED"
+        | "TRANSCRIBING"
+        | "UNDERSTANDING"
+        | "VARIANTS_READY"
+        | "IMAGE_READY"
+        | "RENDERING"
+        | "DONE"
       job_status: "PENDING" | "RUNNING" | "DONE" | "FAILED"
       job_type:
         | "download_video"
@@ -291,6 +314,10 @@ export type Database = {
         | "video"
         | "lipsync"
         | "merge"
+        | "understand"
+        | "build_variants"
+        | "generate_base_image"
+        | "animate_sora"
       render_status:
         | "DRAFT"
         | "IMAGE_GENERATED"
@@ -432,6 +459,14 @@ export const Constants = {
         "IMAGE_APPROVED",
         "VIDEO_RENDERED",
         "FAILED",
+        "DOWNLOADING",
+        "DOWNLOADED",
+        "TRANSCRIBING",
+        "UNDERSTANDING",
+        "VARIANTS_READY",
+        "IMAGE_READY",
+        "RENDERING",
+        "DONE",
       ],
       job_status: ["PENDING", "RUNNING", "DONE", "FAILED"],
       job_type: [
@@ -443,6 +478,10 @@ export const Constants = {
         "video",
         "lipsync",
         "merge",
+        "understand",
+        "build_variants",
+        "generate_base_image",
+        "animate_sora",
       ],
       render_status: [
         "DRAFT",

@@ -1,111 +1,35 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
-/** Fetch the latest render for an asset — polls every 5s when RENDERING */
-export const useRender = (assetId: string | undefined) =>
-  useQuery({
-    queryKey: ["renders", assetId],
-    enabled: !!assetId,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "RENDERING" ? 5000 : false;
-    },
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("renders")
-        .select("*")
-        .eq("asset_id", assetId!)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-  });
-
-/** Create a DRAFT render for an asset if none exists */
-export const useCreateRenderDraft = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ assetId, config }: {
-      assetId: string;
-      config: { variation_level?: number; actor_id?: string; voice_id?: string; emotional_intensity?: number; scenario_prompt?: string };
-    }) => {
-      const { data, error } = await supabase
-        .from("renders")
-        .insert({
-          asset_id: assetId,
-          status: "DRAFT",
-          variation_level: config.variation_level ?? 2,
-          actor_id: config.actor_id ?? null,
-          voice_id: config.voice_id ?? null,
-          emotional_intensity: config.emotional_intensity ?? 50,
-          scenario_prompt: config.scenario_prompt ?? null,
-        })
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["renders", variables.assetId] });
-    },
-  });
-};
-
-/** Update render draft fields */
-export const useUpdateRender = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ renderId, fields }: {
-      renderId: string;
-      fields: Record<string, unknown>;
-    }) => {
-      const { data, error } = await supabase
-        .from("renders")
-        .update(fields)
-        .eq("id", renderId)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["renders", data.asset_id] });
-    },
-  });
-};
-
-/** Generate base image via edge function */
-export const useGenerateBaseImage = () => {
+/** Animate a variant with Sora2 */
+export const useAnimateSora = () => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (renderId: string) => {
+    mutationFn: async ({ assetId, variantId, nFrames = "15" }: { assetId: string; variantId: string; nFrames?: string }) => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
       const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/generate-base-image`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/animate-sora`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ render_id: renderId }),
+          body: JSON.stringify({ asset_id: assetId, variant_id: variantId, n_frames: nFrames }),
         }
       );
       const result = await res.json();
-      if (!res.ok) throw new Error(result.error || "Failed to generate image");
+      if (!res.ok) throw new Error(result.error || "Failed to start animation");
       return result;
     },
-    onSuccess: () => {
-      toast({ title: "Imagen generada", description: "La imagen base fue creada exitosamente." });
-      queryClient.invalidateQueries({ queryKey: ["renders"] });
+    onSuccess: (_, vars) => {
+      toast({ title: "Animación iniciada", description: `Animando variante ${vars.variantId} con Sora2…` });
+      queryClient.invalidateQueries({ queryKey: ["assets", vars.assetId] });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -113,134 +37,35 @@ export const useGenerateBaseImage = () => {
   });
 };
 
-/** Approve the base image */
-export const useApproveImage = () => {
+/** Poll render status for a variant */
+export const usePollVariantRender = () => {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async ({ renderId, assetId }: { renderId: string; assetId: string }) => {
-      // Update render status
-      const { error: renderErr } = await supabase
-        .from("renders")
-        .update({ status: "IMAGE_APPROVED" })
-        .eq("id", renderId);
-      if (renderErr) throw renderErr;
-
-      // Update asset status
-      const { error: assetErr } = await supabase
-        .from("assets")
-        .update({ status: "IMAGE_APPROVED" })
-        .eq("id", assetId);
-      if (assetErr) throw assetErr;
-    },
-    onSuccess: () => {
-      toast({ title: "Imagen aprobada", description: "Podés continuar con el render final." });
-      queryClient.invalidateQueries({ queryKey: ["renders"] });
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-};
-
-/** Generate final video via edge function (KICKOFF ONLY — returns immediately) */
-export const useGenerateFinalVideo = () => {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async ({ renderId, script }: { renderId: string; script?: string }) => {
+    mutationFn: async ({ assetId, variantId }: { assetId: string; variantId: string }) => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
       const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/generate-final-video`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/poll-render-status`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ render_id: renderId, script }),
-        }
-      );
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || "Failed to start video generation");
-      return result;
-    },
-    onSuccess: () => {
-      toast({ title: "Pipeline iniciado", description: "TTS y video se están generando…" });
-      queryClient.invalidateQueries({ queryKey: ["renders"] });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error en render", description: err.message, variant: "destructive" });
-    },
-  });
-};
-
-/** Poll render status — called by frontend every 10s during RENDERING */
-export const usePollRenderStatus = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (renderId: string) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/poll-render-status`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ render_id: renderId }),
+          body: JSON.stringify({ asset_id: assetId, variant_id: variantId }),
         }
       );
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Poll failed");
       return result;
     },
-    onSuccess: (data) => {
+    onSuccess: (data, vars) => {
       if (data.status === "DONE" || data.status === "FAILED") {
-        queryClient.invalidateQueries({ queryKey: ["renders"] });
+        queryClient.invalidateQueries({ queryKey: ["assets", vars.assetId] });
         queryClient.invalidateQueries({ queryKey: ["assets"] });
       }
-    },
-  });
-};
-
-/** Reset a stuck render (RENDERING/FAILED) back to IMAGE_APPROVED for retry */
-export const useResetRender = () => {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async ({ renderId, assetId }: { renderId: string; assetId: string }) => {
-      const { error: renderErr } = await supabase
-        .from("renders")
-        .update({ status: "IMAGE_APPROVED", cost_breakdown_json: {}, final_video_url: null, render_cost: 0 })
-        .eq("id", renderId);
-      if (renderErr) throw renderErr;
-
-      const { error: assetErr } = await supabase
-        .from("assets")
-        .update({ status: "IMAGE_APPROVED" })
-        .eq("id", assetId);
-      if (assetErr) throw assetErr;
-    },
-    onSuccess: () => {
-      toast({ title: "Render reseteado", description: "Podés reintentar la generación de video." });
-      queryClient.invalidateQueries({ queryKey: ["renders"] });
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 };
