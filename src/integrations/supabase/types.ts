@@ -97,6 +97,36 @@ export type Database = {
           },
         ]
       }
+      credit_reservations: {
+        Row: {
+          created_at: string
+          credits: number
+          id: string
+          job_id: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credits?: number
+          id?: string
+          job_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credits?: number
+          id?: string
+          job_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       credit_transactions: {
         Row: {
           created_at: string
@@ -194,6 +224,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      provider_status: {
+        Row: {
+          degraded_until: string | null
+          failure_count: number
+          last_failure_at: string | null
+          provider: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          degraded_until?: string | null
+          failure_count?: number
+          last_failure_at?: string | null
+          provider: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          degraded_until?: string | null
+          failure_count?: number
+          last_failure_at?: string | null
+          provider?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       renders: {
         Row: {
@@ -304,7 +361,16 @@ export type Database = {
         | "IMAGE_READY"
         | "RENDERING"
         | "DONE"
-      job_status: "PENDING" | "RUNNING" | "DONE" | "FAILED"
+      job_status:
+        | "PENDING"
+        | "RUNNING"
+        | "DONE"
+        | "FAILED"
+        | "QUEUED"
+        | "RETRY_SCHEDULED"
+        | "DELAYED_PROVIDER_DEGRADED"
+        | "FAILED_FATAL"
+        | "FAILED_PROVIDER"
       job_type:
         | "download_video"
         | "transcribe"
@@ -468,7 +534,17 @@ export const Constants = {
         "RENDERING",
         "DONE",
       ],
-      job_status: ["PENDING", "RUNNING", "DONE", "FAILED"],
+      job_status: [
+        "PENDING",
+        "RUNNING",
+        "DONE",
+        "FAILED",
+        "QUEUED",
+        "RETRY_SCHEDULED",
+        "DELAYED_PROVIDER_DEGRADED",
+        "FAILED_FATAL",
+        "FAILED_PROVIDER",
+      ],
       job_type: [
         "download_video",
         "transcribe",

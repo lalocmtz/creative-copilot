@@ -7,7 +7,7 @@ import CreditConfirmModal from "@/components/CreditConfirmModal";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Film, Download, ArrowLeft, RefreshCw } from "lucide-react";
+import { Loader2, Film, Download, ArrowLeft, RefreshCw, Clock, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -20,15 +20,16 @@ const RenderPage = () => {
   const { toast } = useToast();
 
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
-  const [nFrames, setNFrames] = useState("15");
+  const [nFrames, setNFrames] = useState("10");
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [renderDetail, setRenderDetail] = useState<string>("");
+  const [renderStatus, setRenderStatus] = useState<string>("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const variants = (asset?.variants_json as any[]) || [];
   const approvedVariants = variants.filter((v: any) => v.base_image_approved);
 
-  // Auto-select first approved variant
   useEffect(() => {
     if (!selectedVariant && approvedVariants.length > 0) {
       setSelectedVariant(approvedVariants[0].variant_id);
@@ -37,7 +38,7 @@ const RenderPage = () => {
 
   const currentVariant = variants.find((v: any) => v.variant_id === selectedVariant);
 
-  // Polling for render status
+  // Polling
   useEffect(() => {
     if (!isRendering || !id || !selectedVariant) {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -47,6 +48,9 @@ const RenderPage = () => {
     const poll = () => {
       pollRender.mutate({ assetId: id, variantId: selectedVariant }, {
         onSuccess: (data) => {
+          setRenderDetail(data.detail || "");
+          setRenderStatus(data.status || "");
+
           if (data.status === "DONE") {
             setIsRendering(false);
             refetch();
@@ -55,8 +59,13 @@ const RenderPage = () => {
           } else if (data.status === "FAILED") {
             setIsRendering(false);
             refetch();
-            toast({ title: "Error", description: data.detail || "La animación falló", variant: "destructive" });
+            toast({
+              title: "Error",
+              description: data.detail || "La animación falló",
+              variant: "destructive",
+            });
           }
+          // QUEUED and RENDERING keep polling
         },
         onError: () => { setIsRendering(false); },
       });
@@ -67,7 +76,6 @@ const RenderPage = () => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [isRendering, id, selectedVariant]);
 
-  // Check if asset is currently rendering
   useEffect(() => {
     if (asset?.status === "RENDERING") setIsRendering(true);
   }, [asset?.status]);
@@ -75,15 +83,32 @@ const RenderPage = () => {
   const handleAnimate = () => {
     if (!id || !selectedVariant) return;
     animateSora.mutate({ assetId: id, variantId: selectedVariant, nFrames }, {
-      onSuccess: () => {
+      onSuccess: (data) => {
         setIsRendering(true);
         setShowCreditModal(false);
+        if (data.status === "QUEUED") {
+          setRenderStatus("QUEUED");
+          setRenderDetail(data.detail || "En cola…");
+        }
+      },
+    });
+  };
+
+  const handleForceRetry = () => {
+    if (!id || !selectedVariant) return;
+    animateSora.mutate({ assetId: id, variantId: selectedVariant, nFrames }, {
+      onSuccess: () => {
+        setIsRendering(true);
+        setRenderStatus("RENDERING");
+        setRenderDetail("Reintentando…");
       },
     });
   };
 
   if (isLoading) return <div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   if (!asset) return <div className="p-8 text-center text-muted-foreground">Asset no encontrado</div>;
+
+  const isQueued = renderStatus === "QUEUED";
 
   return (
     <div className="p-6 md:p-8 max-w-2xl mx-auto space-y-6">
@@ -93,7 +118,7 @@ const RenderPage = () => {
             <ArrowLeft className="w-3 h-3" /> Volver a variantes
           </Link>
           <h1 className="text-xl font-bold text-foreground">Animación (Sora2)</h1>
-          <p className="text-sm text-muted-foreground mt-1">Animá tus imágenes aprobadas con Sora2 Pro.</p>
+          <p className="text-sm text-muted-foreground mt-1">Animá tus imágenes aprobadas con I2V.</p>
         </div>
         <StatusBadge status={asset.status} />
       </div>
@@ -128,7 +153,7 @@ const RenderPage = () => {
             </div>
           </div>
 
-          {/* Frame toggle */}
+          {/* Frame toggle — Short is default */}
           <div>
             <label className="text-sm font-medium text-foreground mb-2 block">Duración</label>
             <div className="flex gap-2">
@@ -162,17 +187,41 @@ const RenderPage = () => {
             </motion.div>
           )}
 
-          {/* Progress */}
+          {/* Progress — handles RENDERING, QUEUED, RETRY states */}
           {isRendering && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3 rounded-xl border border-border bg-card p-6">
               <div className="flex items-center gap-3">
-                <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                <div>
-                  <p className="text-sm font-medium text-foreground">Animando con Sora2…</p>
-                  <p className="text-xs text-muted-foreground">Te avisamos en cuanto esté listo.</p>
+                {isQueued ? (
+                  <Clock className="w-5 h-5 text-warning" />
+                ) : (
+                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                )}
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">
+                    {isQueued ? "En cola — reintento automático" : "Animando con I2V…"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {renderDetail || "Te avisamos en cuanto esté listo."}
+                  </p>
                 </div>
               </div>
-              <Progress value={undefined} className="h-2" />
+
+              {!isQueued && <Progress value={undefined} className="h-2" />}
+
+              {isQueued && (
+                <div className="flex items-start gap-2 bg-warning/10 rounded-lg p-3 mt-2">
+                  <AlertTriangle className="w-4 h-4 text-warning mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground">
+                    No se cobrarán créditos hasta que el proveedor acepte el task. El sistema reintenta automáticamente.
+                  </p>
+                </div>
+              )}
+
+              {isQueued && (
+                <Button variant="outline" size="sm" onClick={handleForceRetry} disabled={animateSora.isPending} className="w-full gap-2 mt-2">
+                  <RefreshCw className="w-3 h-3" /> Intentar ahora
+                </Button>
+              )}
             </motion.div>
           )}
 

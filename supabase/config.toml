@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.fetch-thumbnail]
 verify_jwt = false
+
+[functions.kie-callback]
+verify_jwt = false
