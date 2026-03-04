@@ -37,8 +37,8 @@ function getNextRetryAt(retryCount: number): string {
 // ═══ MODEL CONFIGS (same as animate-sora) ═══
 const ALL_MODELS = [
   "sora-2-pro-image-to-video", "sora-2-image-to-video",
-  "kling/v2-1-master-image-to-video", "wan-2.6-image-to-video",
-  "bytedance-v1-pro-fast-image-to-video",
+  "kling-2.6/image-to-video", "wan/2-6-image-to-video",
+  "hailuo/02-image-to-video-pro", "bytedance/seedance-1.5-pro",
 ];
 
 interface ModelConfig {
@@ -61,21 +61,29 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
       remove_watermark: true, character_id_list: [],
     }),
   },
-  "kling/v2-1-master-image-to-video": {
-    id: "kling/v2-1-master-image-to-video",
+  "kling-2.6/image-to-video": {
+    id: "kling-2.6/image-to-video",
     buildInput: (url, prompt) => ({
-      image_url: url, prompt,
-      negative_prompt: "blurry, distorted, low quality, watermark, text overlay, extra limbs, artifacts",
-      cfg_scale: 0.5, duration: "10",
+      image_urls: [url], prompt, sound: false, duration: "10",
     }),
   },
-  "wan-2.6-image-to-video": {
-    id: "wan-2.6-image-to-video",
-    buildInput: (url, prompt) => ({ image_url: url, prompt, ratio: "9:16" }),
+  "wan/2-6-image-to-video": {
+    id: "wan/2-6-image-to-video",
+    buildInput: (url, prompt) => ({
+      image_urls: [url], prompt, duration: "10", resolution: "720p",
+    }),
   },
-  "bytedance-v1-pro-fast-image-to-video": {
-    id: "bytedance-v1-pro-fast-image-to-video",
-    buildInput: (url, prompt) => ({ image_url: url, prompt, aspect_ratio: "9:16" }),
+  "hailuo/02-image-to-video-pro": {
+    id: "hailuo/02-image-to-video-pro",
+    buildInput: (url, prompt) => ({
+      image_url: url, prompt,
+    }),
+  },
+  "bytedance/seedance-1.5-pro": {
+    id: "bytedance/seedance-1.5-pro",
+    buildInput: (url, prompt) => ({
+      input_urls: [url], prompt,
+    }),
   },
 };
 
@@ -104,7 +112,12 @@ async function getDownloadUrl(fileUrl: string, apiKey: string): Promise<string> 
   return result.data;
 }
 
-// ═══ RETRY: create new task with next model ═══
+// ═══ RETRY: create new task with next model (with per-model retries + backoff) ═══
+const CONTINGENCY_MAX_ATTEMPTS = 2;
+const CONTINGENCY_BACKOFFS = [1500, 3000];
+
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
 async function retryWithNextModel(
   failedModels: string[], kieImageUrl: string, prompt: string, nFrames: string, apiKey: string, callbackUrl: string,
 ): Promise<{ taskId: string; modelUsed: string } | null> {
@@ -112,25 +125,34 @@ async function retryWithNextModel(
   for (const modelId of remaining) {
     const config = MODEL_CONFIGS[modelId];
     if (!config) continue;
-    console.log(`[CONTINGENCY] Trying: ${modelId}`);
-    try {
-      const input = config.buildInput(kieImageUrl, prompt, nFrames);
-      const res = await fetch(`${KIE_BASE}/jobs/createTask`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: config.id, input, callBackUrl: callbackUrl }),
-      });
-      const data = await res.json();
-      if (data.code === 200 && data.data?.taskId) {
-        console.log(`[CONTINGENCY] ✅ ${modelId}: ${data.data.taskId}`);
-        return { taskId: data.data.taskId, modelUsed: modelId };
+
+    for (let attempt = 1; attempt <= CONTINGENCY_MAX_ATTEMPTS; attempt++) {
+      console.log(`[CONTINGENCY] ${modelId} attempt ${attempt}/${CONTINGENCY_MAX_ATTEMPTS}`);
+      try {
+        const input = config.buildInput(kieImageUrl, prompt, nFrames);
+        const res = await fetch(`${KIE_BASE}/jobs/createTask`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: config.id, input, callBackUrl: callbackUrl }),
+        });
+        const data = await res.json();
+        if (data.code === 200 && data.data?.taskId) {
+          console.log(`[CONTINGENCY] ✅ ${modelId}: ${data.data.taskId}`);
+          return { taskId: data.data.taskId, modelUsed: modelId };
+        }
+        const errMsg = data.msg || JSON.stringify(data);
+        console.warn(`[CONTINGENCY] ❌ ${modelId}: ${errMsg}`);
+        // Fatal errors (credits, auth, unsupported) → skip model immediately
+        const lower = errMsg.toLowerCase();
+        if (lower.includes("insufficient") || lower.includes("not supported") || lower.includes("unauthorized")) break;
+        // Transient → backoff and retry
+        if (attempt < CONTINGENCY_MAX_ATTEMPTS) await sleep(CONTINGENCY_BACKOFFS[attempt - 1] || 2000);
+      } catch (err: any) {
+        console.warn(`[CONTINGENCY] ❌ ${modelId}: ${err.message}`);
+        if (attempt < CONTINGENCY_MAX_ATTEMPTS) await sleep(CONTINGENCY_BACKOFFS[attempt - 1] || 2000);
       }
-      console.warn(`[CONTINGENCY] ❌ ${modelId}: ${data.msg || JSON.stringify(data)}`);
-      failedModels.push(modelId);
-    } catch (err: any) {
-      console.warn(`[CONTINGENCY] ❌ ${modelId}: ${err.message}`);
-      failedModels.push(modelId);
     }
+    failedModels.push(modelId);
   }
   return null;
 }
