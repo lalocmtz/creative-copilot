@@ -2,13 +2,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
-/** Animate a variant with Sora2 */
+/** Animate a variant with Sora2 (with retry+backoff+circuit breaker) */
 export const useAnimateSora = () => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async ({ assetId, variantId, nFrames = "15" }: { assetId: string; variantId: string; nFrames?: string }) => {
+    mutationFn: async ({ assetId, variantId, nFrames = "10" }: { assetId: string; variantId: string; nFrames?: string }) => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
@@ -27,8 +27,14 @@ export const useAnimateSora = () => {
       if (!res.ok) throw new Error(result.error || "Failed to start animation");
       return result;
     },
-    onSuccess: (_, vars) => {
-      toast({ title: "Animación iniciada", description: `Animando variante ${vars.variantId} con Sora2…` });
+    onSuccess: (data, vars) => {
+      const isQueued = data.status === "QUEUED";
+      toast({
+        title: isQueued ? "En cola" : "Animación iniciada",
+        description: isQueued
+          ? "Proveedor saturado. Se reintentará automáticamente."
+          : `Animando variante ${vars.variantId}…`,
+      });
       queryClient.invalidateQueries({ queryKey: ["assets", vars.assetId] });
     },
     onError: (err: Error) => {
@@ -65,6 +71,7 @@ export const usePollVariantRender = () => {
       if (data.status === "DONE" || data.status === "FAILED") {
         queryClient.invalidateQueries({ queryKey: ["assets", vars.assetId] });
         queryClient.invalidateQueries({ queryKey: ["assets"] });
+        queryClient.invalidateQueries({ queryKey: ["credits"] });
       }
     },
   });

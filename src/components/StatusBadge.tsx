@@ -13,6 +13,12 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   RENDERING: { label: "Renderizando…", className: "bg-warning/15 text-warning" },
   DONE: { label: "Completo", className: "bg-primary/15 text-primary" },
   FAILED: { label: "Error", className: "bg-destructive/15 text-destructive" },
+  // New job states
+  QUEUED: { label: "En cola", className: "bg-warning/15 text-warning" },
+  RETRY_SCHEDULED: { label: "Reintentando…", className: "bg-warning/15 text-warning" },
+  DELAYED_PROVIDER_DEGRADED: { label: "Proveedor saturado", className: "bg-warning/15 text-warning" },
+  FAILED_FATAL: { label: "Error fatal", className: "bg-destructive/15 text-destructive" },
+  FAILED_PROVIDER: { label: "Proveedor falló", className: "bg-destructive/15 text-destructive" },
   // Legacy statuses
   VIDEO_INGESTED: { label: "Video Ingestado", className: "bg-primary/15 text-primary" },
   BLUEPRINT_GENERATED: { label: "Blueprint Listo", className: "bg-success/15 text-success" },
