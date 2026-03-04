@@ -20,3 +20,9 @@ verify_jwt = false
 
 [functions.kie-callback]
 verify_jwt = false
+
+[functions.motion-ingest]
+verify_jwt = false
+
+[functions.motion-image]
+verify_jwt = false

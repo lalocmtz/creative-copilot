@@ -225,6 +225,57 @@ export type Database = {
           },
         ]
       }
+      motion_projects: {
+        Row: {
+          blueprint_json: Json | null
+          created_at: string
+          duration_seconds: number | null
+          error_message: string | null
+          id: string
+          num_variants: number
+          source_type: string
+          source_url: string | null
+          status: string
+          thumbnail_url: string | null
+          transcript: string | null
+          user_id: string
+          variants_json: Json | null
+          video_storage_path: string | null
+        }
+        Insert: {
+          blueprint_json?: Json | null
+          created_at?: string
+          duration_seconds?: number | null
+          error_message?: string | null
+          id?: string
+          num_variants?: number
+          source_type?: string
+          source_url?: string | null
+          status?: string
+          thumbnail_url?: string | null
+          transcript?: string | null
+          user_id: string
+          variants_json?: Json | null
+          video_storage_path?: string | null
+        }
+        Update: {
+          blueprint_json?: Json | null
+          created_at?: string
+          duration_seconds?: number | null
+          error_message?: string | null
+          id?: string
+          num_variants?: number
+          source_type?: string
+          source_url?: string | null
+          status?: string
+          thumbnail_url?: string | null
+          transcript?: string | null
+          user_id?: string
+          variants_json?: Json | null
+          video_storage_path?: string | null
+        }
+        Relationships: []
+      }
       provider_status: {
         Row: {
           degraded_until: string | null

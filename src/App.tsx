@@ -13,6 +13,7 @@ import RenderPage from "./pages/RenderPage";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import NotFound from "./pages/NotFound";
+import MotionGeneratorPage from "./pages/MotionGeneratorPage";
 
 const queryClient = new QueryClient();
 
@@ -33,6 +34,7 @@ const App = () => (
                 <Route path="/assets/new" element={<IngestPage />} />
                 <Route path="/assets/:id/variants" element={<VariantsPage />} />
                 <Route path="/assets/:id/render" element={<RenderPage />} />
+                <Route path="/motion" element={<MotionGeneratorPage />} />
               </Route>
             </Route>
 

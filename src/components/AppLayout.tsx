@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { LayoutDashboard, Plus, LogOut, Sparkles } from "lucide-react";
+import { LayoutDashboard, Plus, LogOut, Sparkles, Film } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCredits } from "@/hooks/useCredits";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/assets/new", icon: Plus, label: "Nuevo Video" },
+  { to: "/motion", icon: Film, label: "Motion Prompts" },
 ];
 
 const AppLayout = () => {
