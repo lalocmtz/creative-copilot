@@ -71,26 +71,31 @@ const I2V_MODELS: I2VModel[] = [
     }),
   },
   {
-    id: "kling/v2-1-master-image-to-video",
-    label: "Kling V2.1 Master",
+    id: "kling-2.6/image-to-video",
+    label: "Kling 2.6",
     buildInput: (url, prompt) => ({
-      image_url: url, prompt,
-      negative_prompt: "blurry, distorted, low quality, watermark, text overlay, extra limbs, artifacts",
-      cfg_scale: 0.5, duration: "10",
+      image_urls: [url], prompt, sound: false, duration: "10",
     }),
   },
   {
-    id: "wan-2.6-image-to-video",
+    id: "wan/2-6-image-to-video",
     label: "Wan 2.6",
     buildInput: (url, prompt) => ({
-      image_url: url, prompt, ratio: "9:16",
+      image_urls: [url], prompt, duration: "10", resolution: "720p",
     }),
   },
   {
-    id: "bytedance-v1-pro-fast-image-to-video",
-    label: "Bytedance Fast",
+    id: "hailuo/02-image-to-video-pro",
+    label: "Hailuo Pro",
     buildInput: (url, prompt) => ({
-      image_url: url, prompt, aspect_ratio: "9:16",
+      image_url: url, prompt,
+    }),
+  },
+  {
+    id: "bytedance/seedance-1.5-pro",
+    label: "Seedance 1.5",
+    buildInput: (url, prompt) => ({
+      input_urls: [url], prompt,
     }),
   },
 ];
